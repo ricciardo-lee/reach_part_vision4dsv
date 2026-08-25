@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Env & secrets
+.env
+backend/.env
+*.pem
+*.key
+
+# Node
+node_modules/
+dist/
+.DS_Store
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Runtime / logs
+uploads/
+backend/uploads/
+backend/logs/
+logs/
+*.log
+.dev-pids/
+tmp/
+celerybeat-schedule*
+*.sqlite3
+*.db
