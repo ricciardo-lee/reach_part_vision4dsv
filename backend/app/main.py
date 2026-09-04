@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import setup_logging
 from app.core.middleware import register_request_logging
+from app.integrations.mdm.client import mdm_adapter
 from app.services.bootstrap import ensure_bootstrap_data
 from app.utils.minio_client import get_storage
 
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI):
         logger.info("Storage backend ready: %s", type(storage).__name__)
         logger.info("Application startup complete")
         yield
+        await mdm_adapter.aclose()
     logger.info("Application shutdown")
 
 

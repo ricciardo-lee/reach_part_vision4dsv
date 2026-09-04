@@ -119,19 +119,24 @@ DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp
 
 ```env
 MDM_USE_MOCK=false
-MDM_API_BASE_URL=http://<mdm-host>
-MDM_API_TOKEN=<jwt>   # 请求头 token（不是 Bearer）
+MDM_QUERY_BASE_URL=http://<mdm-query-service-host>
+MDM_CLIENT_ID=<issued-client-id>
+MDM_CLIENT_SECRET=<issued-client-secret>
+MDM_QUERY_TIMEOUT_SECONDS=30
+MDM_QUERY_MAX_RETRIES=2
+MDM_TOKEN_REFRESH_SKEW_SECONDS=30
 MDM_VEHICLE_TYPE=passenger
-MDM_COUNTRY=            # 可选，如 中国 / 全部
+MDM_COUNTRY=            # 可选车型国家筛选
 ```
 
-适配器会调用：
+适配器通过 `POST /oauth/token` 获取并缓存短期 Bearer Token，随后调用：
 
-- `GET /api/manage/cars/option_list`（车型级联）
-- `POST /api/manage/products/check_product_exist`（OE 优先）
-- `POST /api/manage/cn_vehicle/search`（品类检索）
+- `GET /api/public/v1/vehicles/options`（车型级联）
+- `POST /api/public/v1/products/resolve-by-oe`（OE 优先）
+- `POST /api/public/v1/cn-vehicle/products/search`（品类 fallback）
 
-账号需具备上述 manage path 的 RBAC。
+第三方应用需具备 `vehicle:read`、`product:read`、`cn_vehicle:read` Scope。客户端会在
+Token 临期时主动刷新，并在业务请求收到 401 时强制刷新一次。
 
 ## 核心业务 API
 

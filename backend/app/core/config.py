@@ -74,9 +74,12 @@ class Settings(BaseSettings):
     DEEPSEEK_TIMEOUT_SECONDS: int = 60
     DEEPSEEK_MAX_RETRIES: int = 2
 
-    MDM_API_BASE_URL: str = "http://127.0.0.1:8000"
-    MDM_API_TOKEN: str = ""
-    MDM_TIMEOUT_SECONDS: int = 30
+    MDM_QUERY_BASE_URL: str = "http://127.0.0.1:8010"
+    MDM_CLIENT_ID: str = ""
+    MDM_CLIENT_SECRET: str = ""
+    MDM_QUERY_TIMEOUT_SECONDS: float = 30
+    MDM_QUERY_MAX_RETRIES: int = 2
+    MDM_TOKEN_REFRESH_SKEW_SECONDS: int = 30
     MDM_USE_MOCK: bool = True
     MDM_VEHICLE_TYPE: str = "passenger"
     MDM_COUNTRY: str = ""

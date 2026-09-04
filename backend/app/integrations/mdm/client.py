@@ -1,14 +1,32 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, List, Optional
+import time
+from typing import Any, Callable, List, Optional
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class MdmError(RuntimeError):
+    """Base error for failures while calling the MDM query service."""
+
+
+class MdmConfigurationError(MdmError):
+    """The query service credentials or URL are not configured."""
+
+
+class MdmAuthenticationError(MdmError):
+    """The query service rejected client credentials or a refreshed token."""
+
+
+class MdmRequestError(MdmError):
+    """The query service could not return a usable response."""
 
 
 class VehicleOption(BaseModel):
@@ -30,47 +48,157 @@ class ProductItem(BaseModel):
 
 
 class MdmAdapter:
-    """Read-only adapter for company MDM manage APIs. Falls back to mock when MDM_USE_MOCK=true."""
+    """Read-only adapter for the standalone MDM query service."""
 
-    def __init__(self) -> None:
-        self.base_url = settings.MDM_API_BASE_URL.rstrip("/")
-        self.token = settings.MDM_API_TOKEN
-        self.timeout = settings.MDM_TIMEOUT_SECONDS
+    def __init__(
+        self,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        client: httpx.AsyncClient | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.base_url = settings.MDM_QUERY_BASE_URL.rstrip("/")
+        self.client_id = settings.MDM_CLIENT_ID
+        self.client_secret = settings.MDM_CLIENT_SECRET
+        self.timeout = settings.MDM_QUERY_TIMEOUT_SECONDS
+        self.max_retries = max(0, settings.MDM_QUERY_MAX_RETRIES)
+        self.token_refresh_skew = max(0, settings.MDM_TOKEN_REFRESH_SKEW_SECONDS)
         self.use_mock = settings.MDM_USE_MOCK
         self.vehicle_type = settings.MDM_VEHICLE_TYPE or "passenger"
         self.country = settings.MDM_COUNTRY or ""
+        self._transport = transport
+        self._client = client
+        self._owns_client = client is None
+        self._clock = clock
+        self._access_token: str | None = None
+        self._token_expires_at = 0.0
+        self._token_lock = asyncio.Lock()
 
-    def _headers(self) -> dict:
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        if self.token:
-            # Reach MDM expects header `token`, not Authorization Bearer.
-            headers["token"] = self.token
-        return headers
-
-    async def _request(self, method: str, path: str, *, params: Optional[dict] = None, json_body: Any = None) -> Any:
-        if not self.use_mock and not self.token:
-            raise RuntimeError(
-                "MDM_API_TOKEN is empty. Set it in backend/.env "
-                "(local MDM accepts token=dev) or set MDM_USE_MOCK=true."
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=self.timeout,
+                transport=self._transport,
             )
-        url = f"{self.base_url}{path}"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.request(
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
+        self._client = None
+
+    def _validate_configuration(self) -> None:
+        if not self.base_url or not self.client_id or not self.client_secret:
+            raise MdmConfigurationError(
+                "MDM query service is not configured. Set MDM_QUERY_BASE_URL, "
+                "MDM_CLIENT_ID and MDM_CLIENT_SECRET, or enable MDM_USE_MOCK."
+            )
+
+    async def _send_with_retries(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        client = self._get_client()
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = await client.request(method, path, **kwargs)
+            except httpx.TransportError as exc:
+                if attempt >= self.max_retries:
+                    raise MdmRequestError(
+                        f"MDM request failed after {attempt + 1} attempts: {method} {path}"
+                    ) from exc
+                continue
+            if response.status_code < 500 or attempt >= self.max_retries:
+                return response
+        raise AssertionError("unreachable")
+
+    async def _fetch_access_token(self) -> tuple[str, float]:
+        self._validate_configuration()
+        response = await self._send_with_retries(
+            "POST",
+            "/oauth/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+            },
+            headers={"Accept": "application/json"},
+        )
+        if response.status_code in {400, 401, 403}:
+            raise MdmAuthenticationError(
+                f"MDM token request was rejected with status {response.status_code}"
+            )
+        if response.status_code >= 400:
+            raise MdmRequestError(f"MDM token request failed with status {response.status_code}")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise MdmRequestError("MDM token response was not valid JSON") from exc
+        token_data = self._unwrap_data(payload)
+        if not isinstance(token_data, dict):
+            raise MdmRequestError("MDM token response has an unexpected shape")
+        token = str(token_data.get("access_token") or "").strip()
+        try:
+            expires_in = float(token_data.get("expires_in", 300))
+        except (TypeError, ValueError) as exc:
+            raise MdmRequestError("MDM token response contains an invalid expires_in") from exc
+        if not token or expires_in <= 0:
+            raise MdmRequestError("MDM token response is missing a usable access_token")
+        return token, expires_in
+
+    def _token_is_fresh(self) -> bool:
+        return bool(
+            self._access_token
+            and self._clock() + self.token_refresh_skew < self._token_expires_at
+        )
+
+    async def _get_access_token(self, *, force: bool = False, stale_token: str | None = None) -> str:
+        if not force and self._token_is_fresh():
+            return self._access_token or ""
+        async with self._token_lock:
+            if force and stale_token and self._access_token != stale_token and self._token_is_fresh():
+                return self._access_token or ""
+            if not force and self._token_is_fresh():
+                return self._access_token or ""
+            token, expires_in = await self._fetch_access_token()
+            self._access_token = token
+            self._token_expires_at = self._clock() + expires_in
+            return token
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict] = None,
+        json_body: Any = None,
+    ) -> Any:
+        token = await self._get_access_token()
+        response = await self._send_with_retries(
+            method,
+            path,
+            params=params,
+            json=json_body,
+            headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+        )
+        if response.status_code == 401:
+            token = await self._get_access_token(force=True, stale_token=token)
+            response = await self._send_with_retries(
                 method,
-                url,
+                path,
                 params=params,
                 json=json_body,
-                headers=self._headers(),
+                headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
             )
-            if response.status_code == 422:
-                detail = ""
-                try:
-                    detail = response.text[:300]
-                except Exception:  # noqa: BLE001
-                    detail = ""
-                logger.error("MDM 422 | %s %s | params=%s | body=%s", method, path, params, detail)
-            response.raise_for_status()
+            if response.status_code == 401:
+                raise MdmAuthenticationError(f"MDM rejected the refreshed token for {method} {path}")
+        if response.status_code >= 400:
+            detail = response.text[:300]
+            raise MdmRequestError(
+                f"MDM request failed with status {response.status_code}: {method} {path}; {detail}"
+            )
+        try:
             return response.json()
+        except ValueError as exc:
+            raise MdmRequestError(f"MDM response was not valid JSON: {method} {path}") from exc
 
     async def _get(self, path: str, params: Optional[dict] = None) -> Any:
         return await self._request("GET", path, params=params)
@@ -83,30 +211,28 @@ class MdmAdapter:
             return payload.get("data")
         return payload
 
-    async def _option_list(self, **filters: str) -> dict:
-        params = {k: v for k, v in filters.items() if v}
+    async def _option_list(self, **filters: str) -> dict[str, Any]:
+        params = {key: value for key, value in filters.items() if value}
         if self.country:
             params.setdefault("country", self.country)
-        payload = await self._get("/api/manage/cars/option_list", params=params)
+        payload = await self._get("/api/public/v1/vehicles/options", params=params)
         data = self._unwrap_data(payload)
         if not isinstance(data, dict):
-            logger.warning("MDM option_list unexpected shape | keys=%s", type(data))
+            logger.warning("MDM vehicle options unexpected shape | type=%s", type(data))
             return {}
         return data
 
     def _to_options(self, items: Any) -> List[VehicleOption]:
-        results: List[VehicleOption] = []
+        options: List[VehicleOption] = []
         for item in items or []:
-            if isinstance(item, dict):
-                value = item.get("value")
-                label = item.get("label", value)
-            else:
-                value = item
-                label = item
+            if not isinstance(item, dict):
+                continue
+            value = item.get("value")
+            label = item.get("label", value)
             if value is None or value == "":
                 continue
-            results.append(VehicleOption(value=str(value), label=str(label)))
-        return self._sort_options(results)
+            options.append(VehicleOption(value=str(value), label=str(label)))
+        return self._sort_options(options)
 
     @staticmethod
     def _option_sort_key(opt: VehicleOption) -> tuple:
@@ -228,7 +354,11 @@ class MdmAdapter:
                 return results
 
         if category_name:
-            results = await self._search_by_category(category_name, oe_number=oe_number, fitment=fit)
+            results = await self._search_by_category(
+                category_name,
+                oe_number=oe_number,
+                fitment=fit,
+            )
             if results:
                 return results
 
@@ -249,34 +379,41 @@ class MdmAdapter:
         fitment: Optional[str],
     ) -> List[ProductItem]:
         payload = await self._post(
-            "/api/manage/products/check_product_exist",
-            json_body={"oe": oe_number},
+            "/api/public/v1/products/resolve-by-oe",
+            json_body={"oe_numbers": [oe_number]},
         )
-        if isinstance(payload, dict) and payload.get("code") not in (None, 200, 0, "0", "200"):
-            logger.warning(
-                "MDM check_product_exist non-ok | code=%s | msg=%s",
-                payload.get("code"),
-                payload.get("msg"),
-            )
-        items = self._unwrap_data(payload) or []
+        data = self._unwrap_data(payload)
+        items = data.get("items", []) if isinstance(data, dict) else []
         results: List[ProductItem] = []
         seen: set[str] = set()
         for item in items:
             if not isinstance(item, dict):
                 continue
-            sku = str(item.get("Materiel_Number") or item.get("material_code") or "").strip()
+            sku = str(item.get("material_code") or "").strip()
             if not sku or sku in seen:
                 continue
             seen.add(sku)
-            name = str(item.get("part_name") or item.get("Standard_Name") or category_name or sku)
+            name = str(
+                item.get("part_name")
+                or item.get("category_name")
+                or category_name
+                or sku
+            )
             results.append(
                 ProductItem(
                     sku=sku,
                     name=name,
-                    category_name=category_name or name,
-                    oe_number=oe_number,
-                    brand="Reach",
-                    fitment=fitment,
+                    category_name=(
+                        item.get("category_name")
+                        or category_name
+                        or name
+                    ),
+                    oe_number=item.get("oe_number") or oe_number,
+                    brand=item.get("brand") or "Reach",
+                    fitment=item.get("fitment") or fitment,
+                    image_url=item.get("image_url"),
+                    stock_status=item.get("stock_status"),
+                    price=item.get("price"),
                     match_reason="OE精确匹配",
                 )
             )
@@ -290,39 +427,47 @@ class MdmAdapter:
         fitment: Optional[str],
     ) -> List[ProductItem]:
         body: dict[str, Any] = {
-            "vehicle_type": self.vehicle_type if self.vehicle_type in {"passenger", "truck"} else "passenger",
+            "vehicle_type": (
+                self.vehicle_type
+                if self.vehicle_type in {"passenger", "truck"}
+                else "passenger"
+            ),
             "category_name": category_name,
+            "oe_numbers": [oe_number] if oe_number else [],
             "page": 1,
             "page_size": 20,
         }
-        if oe_number:
-            body["oe_numbers"] = oe_number
-        payload = await self._post("/api/manage/cn_vehicle/search", json_body=body)
-        if isinstance(payload, dict) and payload.get("code") not in (None, 200, 0, "0", "200"):
-            logger.warning(
-                "MDM cn_vehicle/search non-ok | code=%s | msg=%s",
-                payload.get("code"),
-                payload.get("msg"),
-            )
-        items = self._unwrap_data(payload) or []
+        payload = await self._post("/api/public/v1/cn-vehicle/products/search", json_body=body)
+        data = self._unwrap_data(payload)
+        items = data.get("items", []) if isinstance(data, dict) else []
         results: List[ProductItem] = []
         seen: set[str] = set()
         for item in items:
             if not isinstance(item, dict):
                 continue
-            sku = str(item.get("reach_number") or item.get("Materiel_Number") or "").strip()
+            sku = str(item.get("material_code") or "").strip()
             if not sku or sku in seen:
                 continue
             seen.add(sku)
-            name = str(item.get("category_name") or category_name)
+            name = str(
+                item.get("part_name")
+                or item.get("category_name")
+                or category_name
+            )
             results.append(
                 ProductItem(
                     sku=sku,
                     name=name,
-                    category_name=item.get("category_name") or category_name,
-                    oe_number=oe_number,
-                    brand="Reach",
-                    fitment=fitment,
+                    category_name=(
+                        item.get("category_name")
+                        or category_name
+                    ),
+                    oe_number=item.get("oe_number") or oe_number,
+                    brand=item.get("brand") or "Reach",
+                    fitment=item.get("fitment") or fitment,
+                    image_url=item.get("image_url"),
+                    stock_status=item.get("stock_status"),
+                    price=item.get("price"),
                     match_reason="品类匹配",
                 )
             )
