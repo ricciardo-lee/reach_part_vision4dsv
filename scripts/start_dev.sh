@@ -53,8 +53,9 @@ else
   start_bg api uvicorn app.main:app --host 0.0.0.0 --port "$API_PORT"
 fi
 
-# Celery worker（必须成功，否则识别会 503）
-if ! start_bg celery celery -A app.tasks.celery_app.celery_app worker -l info --concurrency=2 \
+# Celery worker（必须成功，否则识别会 503；默认 concurrency=1 避免重复加载 DINOv2）
+WORKER_CONCURRENCY="${CELERY_WORKER_CONCURRENCY:-1}"
+if ! start_bg celery celery -A app.tasks.celery_app.celery_app worker -l info --concurrency="$WORKER_CONCURRENCY" \
   --without-heartbeat --without-mingle --without-gossip; then
   echo "ERROR: Celery worker failed to start. Recognition will return 503."
   exit 1

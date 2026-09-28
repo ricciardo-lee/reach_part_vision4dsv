@@ -25,12 +25,34 @@ class DeviceSessionOut(APIModel):
     expires_at: datetime
 
 
+class FocusPointOut(BaseModel):
+    x: float
+    y: float
+    source: Optional[str] = None
+
+
+class ImageFocusPointIn(BaseModel):
+    image_id: int
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+    source: Optional[str] = None
+
+
+class ImageFocusPointsIn(BaseModel):
+    items: List[ImageFocusPointIn] = Field(min_length=1)
+
+
 class ImageOut(APIModel):
     id: int
     object_key: str
     purpose: str
     sort_order: int
     preview_url: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    focus_point: Optional[FocusPointOut] = None
+    foreground_preview_url: Optional[str] = None
+    foreground_source: Optional[str] = None
 
 
 class CandidateOut(BaseModel):
@@ -50,13 +72,41 @@ class RecognitionResultOut(APIModel):
     mapped_category_name: Optional[str] = None
 
 
+class RetrievalCandidateOut(BaseModel):
+    sku: str
+    category_id: Optional[str] = None
+    category_cn: Optional[str] = None
+    score: float = 0.0
+    matched_views: List[str] = Field(default_factory=list)
+    reason: str = "vector_match"
+
+
+class RetrievalMatchOut(BaseModel):
+    accepted: bool = False
+    decision: Optional[str] = None
+    confidence_level: Optional[str] = None
+    matched_sku: Optional[str] = None
+    score: Optional[float] = None
+    margin: Optional[float] = None
+    selected_category_id: Optional[str] = None
+    selected_category_cn: Optional[str] = None
+    category_confidence: Optional[float] = None
+    vision_assisted: bool = False
+    index_version: Optional[str] = None
+    embedding_model: Optional[str] = None
+    fallback_reason: Optional[str] = None
+    candidates: List[RetrievalCandidateOut] = Field(default_factory=list)
+
+
 class RecognitionSessionOut(APIModel):
     public_id: str
     status: str
     progress_hint: Optional[str] = None
     is_auto_part: bool = True
+    recognition_mode: Optional[str] = None  # sku_match | category_match | vision_fallback
     images: List[ImageOut] = Field(default_factory=list)
     result: Optional[RecognitionResultOut] = None
+    retrieval: Optional[RetrievalMatchOut] = None
     confirmed_category_code: Optional[str] = None
     confirmed_category_name: Optional[str] = None
     vehicle_brand: Optional[str] = None
@@ -104,6 +154,8 @@ class ProductOut(BaseModel):
     stock_status: Optional[str] = None
     price: Optional[float] = None
     match_reason: Optional[str] = None
+    # Reserved for future technical-attribute narrowing (empty for now).
+    attributes: Optional[dict] = None
 
 
 class AdminLoginIn(BaseModel):
@@ -176,6 +228,11 @@ class StatsOut(BaseModel):
     top3_hit_rate: Optional[float] = None
     reject_rate: Optional[float] = None
     labeled_sessions: int = 0
+    sku_match_sessions: int = 0
+    category_match_sessions: int = 0
+    vision_fallback_sessions: int = 0
+    sku_match_rate: Optional[float] = None
+    category_match_rate: Optional[float] = None
 
 
 class ConsentIn(BaseModel):

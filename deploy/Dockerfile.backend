@@ -1,0 +1,32 @@
+# Shared image for the API, Celery worker, and Celery beat.
+# Dependencies are installed here. Do not pip install inside a running container.
+
+FROM python:3.11-slim-bookworm
+
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/data/models \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir \
+        --index-url "${TORCH_INDEX_URL}" \
+        --extra-index-url https://pypi.org/simple \
+        -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+COPY backend/ /app/
+COPY deploy/ensure_models.py /app/ensure_models.py
+
+RUN mkdir -p /data/models /data/indexes /data/uploads /app/logs
+
+EXPOSE 8000

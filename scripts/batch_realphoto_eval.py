@@ -214,6 +214,13 @@ class RecognizeClient:
             for handle in handles:
                 handle.close()
 
+    def save_focus_points(self, public_id: str, items: Sequence[Dict[str, Any]]) -> Any:
+        return self._request(
+            "PUT",
+            f"/api/v1/public/recognize/{public_id}/image-focus-points",
+            json={"items": list(items)},
+        )
+
     def start(self, public_id: str) -> Any:
         return self._request("POST", f"/api/v1/public/recognize/{public_id}/start")
 
@@ -233,20 +240,30 @@ class RecognizeClient:
             time.sleep(self.poll_interval)
         raise EvalApiError(f"识别超时（{self.poll_timeout:.0f}s），最后状态={last.get('status')}")
 
-    def recognize(self, upload: UploadSet) -> Dict[str, Any]:
+    def recognize(self, upload: UploadSet, *, focus_mode: str = "none") -> Dict[str, Any]:
         # One independent device session per part so eval does not share the
         # public API's per-device 30 req/min bucket.
         session_id = f"{self.device_id}-{uuid.uuid4().hex[:16]}"[:128]
         self.create_device_session(session_id)
         public_id = self.create_recognition_session()
-        self.upload_images(public_id, [upload.overall.path], purpose="part_overall", sort_order=0)
-        if upload.others:
-            self.upload_images(
-                public_id,
-                [photo.path for photo in upload.others],
-                purpose="part",
-                sort_order=1,
-            )
+        paths = [photo.path for photo in upload.all_photos]
+        session = self.upload_images(public_id, paths, purpose="part", sort_order=0)
+        if focus_mode == "center":
+            images = []
+            if isinstance(session, dict):
+                images = session.get("images") or []
+            items = [
+                {
+                    "image_id": img["id"],
+                    "x": 0.5,
+                    "y": 0.5,
+                    "source": "center_default",
+                }
+                for img in images
+                if img.get("id")
+            ]
+            if items:
+                self.save_focus_points(public_id, items)
         self.start(public_id)
         return self.poll_until_done(public_id)
 
@@ -449,7 +466,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="识别服务地址")
     parser.add_argument("--per-prefix", type=int, default=DEFAULT_PER_PREFIX, help="每种品类前缀抽取的物料数")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="随机种子")
-    parser.add_argument("--max-images", type=int, default=DEFAULT_MAX_IMAGES, help="每个物料最多上传张数（含整体外观）")
+    parser.add_argument("--max-images", type=int, default=DEFAULT_MAX_IMAGES, help="每个物料最多上传张数（同一产品多角度，默认 8）")
     parser.add_argument("--limit", type=int, default=None, help="最多识别物料数，用于调试")
     parser.add_argument("--dry-run", action="store_true", help="只抽样并写 Excel，不调用识别")
     parser.add_argument("--resume", type=Path, default=None, help="从已有 xlsx 继续，跳过已成功物料并重试失败项")
@@ -457,6 +474,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--poll-interval", type=float, default=3.0, help="轮询间隔秒")
     parser.add_argument("--poll-timeout", type=float, default=180.0, help="单次识别超时秒")
     parser.add_argument("--device-id", default=DEFAULT_DEVICE_ID, help="设备 ID 前缀；每个物料会再拼独立后缀")
+    parser.add_argument(
+        "--focus-mode",
+        choices=["none", "center"],
+        default="none",
+        help="已忽略。检索对原图自动去背景，不再使用点选或中心点",
+    )
     return parser.parse_args(argv)
 
 
@@ -496,6 +519,7 @@ def run(args: argparse.Namespace) -> int:
                 ("max_images", args.max_images),
                 ("dry_run", args.dry_run),
                 ("limit", args.limit if args.limit is not None else ""),
+                ("focus_mode", args.focus_mode),
                 ("合格物料总数", len(eligible)),
                 ("抽样物料数", len(sampled)),
                 ("已测物料数", len(completed)),
@@ -543,7 +567,7 @@ def run(args: argparse.Namespace) -> int:
             session: Optional[Dict[str, Any]] = None
             error = ""
             try:
-                session = client.recognize(upload)
+                session = client.recognize(upload, focus_mode=args.focus_mode)
                 if session.get("status") == "failed":
                     error = session.get("error_message") or "识别失败"
                     failures += 1

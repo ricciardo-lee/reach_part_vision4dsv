@@ -2,7 +2,7 @@
   <div class="page">
     <section class="card hero">
       <h1 class="title-row"><span class="emoji" aria-hidden="true">📷</span> 零件识图找货</h1>
-      <p class="muted">按角度上传实拍图，AI 识别品类后可选择车型或输入 OE 号查询公司产品。</p>
+      <p class="muted">上传同一产品的多角度实拍图（最多 8 张），优先匹配公司 360 图库 SKU；未命中再走品类识别与产品查询。</p>
       <van-steps :active="stepActive" active-color="#1f6feb">
         <van-step>拍照上传</van-step>
         <van-step>确认品类</van-step>
@@ -13,23 +13,17 @@
     </section>
 
     <section class="card">
-      <h3 class="title-row"><span class="emoji" aria-hidden="true">🧭</span> 多角度拍摄</h3>
-      <p class="muted">至少上传 1 张；建议补齐整体、接口、铭牌，光线充足，避免强反光。</p>
-      <div v-for="slot in angleSlots" :key="slot.purpose" class="slot">
-        <div class="title-row" style="margin-bottom: 6px">
-          <span class="emoji" aria-hidden="true">{{ slot.emoji }}</span>
-          {{ slot.label }}
-          <span class="muted" v-if="slot.required">（建议）</span>
-        </div>
-        <van-uploader
-          v-model="slot.fileList"
-          :max-count="1"
-          accept="image/*"
-          :max-size="10 * 1024 * 1024"
-          @oversize="onOversize"
-        />
-      </div>
-      <p class="muted" style="margin-top: 8px">已选 {{ totalFiles }} / 4 张</p>
+      <h3 class="title-row"><span class="emoji" aria-hidden="true">🧭</span> 多角度拍照</h3>
+      <p class="muted">至少 1 张，最多 8 张；请确保全部属于同一产品的不同角度，光线充足，避免强反光。</p>
+      <van-uploader
+        v-model="fileList"
+        multiple
+        :max-count="8"
+        accept="image/*"
+        :max-size="10 * 1024 * 1024"
+        @oversize="onOversize"
+      />
+      <p class="muted" style="margin-top: 8px">已选 {{ totalFiles }} / 8 张。识别时会直接对原图去背景，无需点选主体。</p>
     </section>
 
     <section class="card">
@@ -64,7 +58,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showLoadingToast, closeToast } from 'vant'
 import { useRecognitionStore } from '@/stores/recognition'
@@ -75,16 +69,10 @@ const loading = ref(false)
 const optimizationConsent = ref(false)
 const errorMessage = ref('')
 const progressMessage = ref('')
-
-const angleSlots = reactive([
-  { purpose: 'part_overall', emoji: '🖼️', label: '整体外观', required: true, sortOrder: 0, fileList: [] },
-  { purpose: 'part_connector', emoji: '🔌', label: '接口特写', required: false, sortOrder: 1, fileList: [] },
-  { purpose: 'part_label', emoji: '🏷️', label: '铭牌/标签', required: false, sortOrder: 2, fileList: [] },
-  { purpose: 'part_other', emoji: '➕', label: '其他角度', required: false, sortOrder: 3, fileList: [] },
-])
+const fileList = ref([])
 
 const totalFiles = computed(() =>
-  angleSlots.reduce((sum, slot) => sum + slot.fileList.filter((f) => f?.file || f?.content).length, 0),
+  fileList.value.filter((f) => f?.file || f?.content).length,
 )
 
 const stepActive = computed(() => {
@@ -102,23 +90,22 @@ function onOversize() {
   showToast({ message: '单张图片不能超过 10MB', position: 'top' })
 }
 
-function collectSlotFiles() {
-  return angleSlots
-    .map((slot) => {
-      const item = slot.fileList[0]
-      const file = item?.file || item?.content
-      if (!(file instanceof Blob)) return null
-      return { purpose: slot.purpose, sortOrder: slot.sortOrder, file }
-    })
-    .filter(Boolean)
+function collectFiles() {
+  return fileList.value
+    .map((item) => item?.file || item?.content)
+    .filter((file) => file instanceof Blob)
 }
 
 async function start() {
   errorMessage.value = ''
   progressMessage.value = ''
-  const slots = collectSlotFiles()
-  if (!slots.length) {
+  const files = collectFiles()
+  if (!files.length) {
     showToast({ message: '请至少上传一张零件照片', position: 'top' })
+    return
+  }
+  if (files.length > 8) {
+    showToast({ message: '最多上传 8 张图片', position: 'top' })
     return
   }
 
@@ -127,13 +114,11 @@ async function start() {
   try {
     await store.createSession()
     progressMessage.value = '图片上传中…'
-    for (const slot of slots) {
-      await store.uploadImages([slot.file], slot.purpose, slot.sortOrder)
-    }
+    await store.uploadImages(files, 'part', 0)
     if (optimizationConsent.value) {
       await store.setConsent(true)
     }
-    progressMessage.value = '已提交识别，排队/处理中…'
+    progressMessage.value = '已提交识别，优先匹配图库…'
     showLoadingToast({ message: progressMessage.value, forbidClick: true, duration: 0 })
     await store.startRecognize((session) => {
       progressMessage.value = session?.progress_hint || `状态：${session?.status || 'processing'}`
@@ -154,6 +139,13 @@ async function start() {
     if (store.session?.is_auto_part === false) {
       const msg = store.session.error_message || '未识别到汽配零件，请重新拍摄'
       showToast({ message: msg, position: 'top' })
+      router.push('/result')
+      return
+    }
+    if (store.session?.recognition_mode === 'sku_match' || store.session?.recognition_mode === 'category_match') {
+      await store.searchProducts()
+      router.push('/products')
+      return
     }
     router.push('/result')
   } catch (err) {
@@ -171,15 +163,3 @@ async function start() {
   }
 }
 </script>
-
-<style scoped>
-.slot {
-  margin-top: 12px;
-  padding-top: 8px;
-  border-top: 1px solid #f0f0f0;
-}
-.slot:first-of-type {
-  border-top: none;
-  padding-top: 0;
-}
-</style>

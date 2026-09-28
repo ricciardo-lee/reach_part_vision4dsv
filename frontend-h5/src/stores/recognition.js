@@ -58,6 +58,14 @@ export const useRecognitionStore = defineStore('recognition', {
       )
       this.session = res.data
     },
+    async saveFocusPoints(items) {
+      if (!this.session?.public_id || !items?.length) return
+      const res = await api.put(
+        `/api/v1/public/recognize/${this.session.public_id}/image-focus-points`,
+        { items },
+      )
+      this.session = res.data
+    },
     async startRecognize(onProgress) {
       const res = await api.post(`/api/v1/public/recognize/${this.session.public_id}/start`)
       this.session = res.data
@@ -72,6 +80,16 @@ export const useRecognitionStore = defineStore('recognition', {
         if (['done', 'failed'].includes(this.session.status)) return
         await new Promise((r) => setTimeout(r, 2000))
       }
+    },
+    async forceVisionFallback() {
+      const res = await api.post(
+        `/api/v1/public/recognize/${this.session.public_id}/force-vision-fallback`,
+      )
+      this.session = res.data
+      this.products = []
+      if (['done', 'failed'].includes(this.session?.status)) return this.session
+      await this.pollUntilDone()
+      return this.session
     },
     async confirmCategory(payload) {
       const res = await api.post(

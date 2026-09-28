@@ -42,3 +42,11 @@ tmp/
 celerybeat-schedule*
 *.sqlite3
 *.db
+
+# 360 retrieval artifacts
+data/indexes/
+*.npy
+backend/tests/
+scripts/clean_photo360.py
+scripts/stat_photo360.py
+.cursor

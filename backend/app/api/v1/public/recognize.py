@@ -7,6 +7,12 @@ from typing import List
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.core.config import settings
+from app.core.constants import (
+    CATEGORY_CN,
+    OE_LABEL_PURPOSE,
+    PART_IMAGE_PURPOSE,
+    PART_PURPOSES,
+)
 from app.core.exceptions import AppError
 from app.api.deps import get_device_session, get_recognition_session
 from app.integrations.mdm.client import mdm_adapter
@@ -17,6 +23,7 @@ from app.models import (
     ProductQuerySnapshot,
     RecognitionResult,
     RecognitionSession,
+    RetrievalResult,
     UploadedImage,
 )
 from app.schemas import (
@@ -24,16 +31,19 @@ from app.schemas import (
     ConfirmCategoryIn,
     ConsentIn,
     FeedbackIn,
+    ImageFocusPointsIn,
     ImageOut,
     OeConfirmIn,
     ProductOut,
     RecognitionResultOut,
     RecognitionSessionOut,
+    RetrievalCandidateOut,
+    RetrievalMatchOut,
     VehicleFilterIn,
 )
 from app.services.bootstrap import image_expiry, new_public_id
 from app.services.part_guard import ensure_auto_part, session_is_auto_part
-from app.services.recognition import run_oe_ocr, run_vision_recognition
+from app.services.recognition import run_oe_ocr
 from app.utils.images import compress_to_jpeg_bytes, compute_phash, validate_image_meta
 from app.utils.minio_client import get_storage
 
@@ -41,12 +51,21 @@ logger = logging.getLogger("app.api.recognize")
 
 router = APIRouter(prefix="/recognize", tags=["public-recognize"])
 
-PART_PURPOSES = {"part", "part_overall", "part_connector", "part_label", "part_other"}
 
-
-def _progress_hint(status: str, *, is_auto_part: bool = True) -> str:
+def _progress_hint(
+    status: str,
+    *,
+    is_auto_part: bool = True,
+    recognition_mode: str | None = None,
+) -> str:
     if status == "done" and not is_auto_part:
         return "未识别到汽配零件，请重新拍摄"
+    if status == "done" and recognition_mode == "sku_match":
+        return "已匹配到公司产品"
+    if status == "done" and recognition_mode == "category_match":
+        return "已确认品类，请从候选产品中选择"
+    if status == "processing":
+        return "识别中（优先图库匹配）…"
     mapping = {
         "created": "等待上传",
         "uploading": "图片已上传，准备识别",
@@ -55,6 +74,19 @@ def _progress_hint(status: str, *, is_auto_part: bool = True) -> str:
         "failed": "识别失败，可重试",
     }
     return mapping.get(status, status)
+
+
+def _session_recognition_mode(
+    retrieval: RetrievalResult | None,
+    vision: RecognitionResult | None,
+) -> str | None:
+    if retrieval and retrieval.accepted:
+        return "sku_match"
+    if retrieval and retrieval.decision == "category_match":
+        return "category_match"
+    if vision or (retrieval and not retrieval.accepted):
+        return "vision_fallback"
+    return None
 
 
 async def serialize_session(session: RecognitionSession) -> RecognitionSessionOut:
@@ -67,6 +99,17 @@ async def serialize_session(session: RecognitionSession) -> RecognitionSessionOu
             preview = storage.presigned_get_url(image.object_key)
         except Exception:  # noqa: BLE001
             preview = None
+        focus = None
+        raw_focus = getattr(image, "focus_point", None)
+        if isinstance(raw_focus, dict) and "x" in raw_focus and "y" in raw_focus:
+            focus = {"x": float(raw_focus["x"]), "y": float(raw_focus["y"]), "source": raw_focus.get("source")}
+        foreground_preview = None
+        foreground_key = getattr(image, "foreground_object_key", None)
+        if foreground_key:
+            try:
+                foreground_preview = storage.presigned_get_url(foreground_key)
+            except Exception:  # noqa: BLE001
+                foreground_preview = None
         image_out.append(
             ImageOut(
                 id=image.id,
@@ -74,11 +117,19 @@ async def serialize_session(session: RecognitionSession) -> RecognitionSessionOu
                 purpose=image.purpose,
                 sort_order=image.sort_order,
                 preview_url=preview,
+                width=image.width,
+                height=image.height,
+                focus_point=focus,
+                foreground_preview_url=foreground_preview,
+                foreground_source=getattr(image, "foreground_source", None),
             )
         )
 
     latest = await RecognitionResult.filter(session_id=session.id, success=True).order_by("-id").first()
+    retrieval = await RetrievalResult.filter(session_id=session.id).order_by("-id").first()
     is_auto_part = await session_is_auto_part(session)
+    recognition_mode = _session_recognition_mode(retrieval, latest)
+
     result_out = None
     if latest:
         result_out = RecognitionResultOut(
@@ -91,13 +142,51 @@ async def serialize_session(session: RecognitionSession) -> RecognitionSessionOu
             mapped_category_name=latest.mapped_category_name,
         )
 
+    retrieval_out = None
+    if retrieval:
+        candidates_raw = retrieval.candidates or []
+        retrieval_out = RetrievalMatchOut(
+            accepted=bool(retrieval.accepted),
+            decision=retrieval.decision,
+            confidence_level=retrieval.confidence_level,
+            matched_sku=retrieval.matched_sku,
+            score=retrieval.score,
+            margin=retrieval.margin,
+            selected_category_id=getattr(retrieval, "selected_category_id", None),
+            selected_category_cn=getattr(retrieval, "selected_category_cn", None),
+            category_confidence=getattr(retrieval, "category_confidence", None),
+            vision_assisted=bool(getattr(retrieval, "vision_assisted", False)),
+            index_version=retrieval.index_version,
+            embedding_model=retrieval.embedding_model,
+            fallback_reason=retrieval.fallback_reason,
+            candidates=[
+                RetrievalCandidateOut(
+                    sku=str(c.get("sku") or ""),
+                    category_id=c.get("category_id"),
+                    category_cn=c.get("category_cn")
+                    or CATEGORY_CN.get(str(c.get("category_id") or ""), None),
+                    score=float(c.get("score") or 0.0),
+                    matched_views=list(c.get("matched_views") or []),
+                    reason=str(c.get("reason") or "vector_match"),
+                )
+                for c in candidates_raw
+                if c.get("sku")
+            ],
+        )
+
     return RecognitionSessionOut(
         public_id=session.public_id,
         status=session.status,
-        progress_hint=_progress_hint(session.status, is_auto_part=is_auto_part),
+        progress_hint=_progress_hint(
+            session.status,
+            is_auto_part=is_auto_part,
+            recognition_mode=recognition_mode,
+        ),
         is_auto_part=is_auto_part,
+        recognition_mode=recognition_mode,
         images=image_out,
         result=result_out,
+        retrieval=retrieval_out,
         confirmed_category_code=session.confirmed_category_code,
         confirmed_category_name=session.confirmed_category_name,
         vehicle_brand=session.vehicle_brand,
@@ -136,24 +225,25 @@ async def get_session(session: RecognitionSession = Depends(get_recognition_sess
 async def upload_images(
     session: RecognitionSession = Depends(get_recognition_session),
     files: List[UploadFile] = File(...),
-    purpose: str = Form("part"),
+    purpose: str = Form(PART_IMAGE_PURPOSE),
     sort_order: int = Form(0),
 ) -> APIResponse:
-    if purpose not in PART_PURPOSES and purpose != "oe_label":
-        raise AppError("purpose 仅支持 part / part_overall / part_connector / part_label / part_other / oe_label")
+    # Normalize legacy angle purposes to unified "part" for new uploads.
+    if purpose in PART_PURPOSES:
+        purpose = PART_IMAGE_PURPOSE
+    if purpose not in {PART_IMAGE_PURPOSE, OE_LABEL_PURPOSE}:
+        raise AppError("purpose 仅支持 part / oe_label（兼容旧角度字段会自动转为 part）")
+
+    if not files:
+        raise AppError("请至少上传 1 张图片")
 
     existing = await UploadedImage.filter(session_id=session.id, purpose=purpose, deleted_at=None).count()
-    if purpose == "oe_label":
+    if purpose == OE_LABEL_PURPOSE:
         max_count = 1
-    elif purpose in PART_PURPOSES - {"part"}:
-        max_count = 1  # one image per angle slot
+        if existing + len(files) > max_count:
+            raise AppError(f"该用途最多上传 {max_count} 张图片")
     else:
-        max_count = settings.MAX_IMAGES_PER_SESSION
-    if existing + len(files) > max_count:
-        raise AppError(f"该用途最多上传 {max_count} 张图片")
-
-    # Cap total part images across all part* purposes
-    if purpose in PART_PURPOSES:
+        # All part images share one quota (1–8), independent of oe_label.
         part_total = await UploadedImage.filter(
             session_id=session.id,
             purpose__in=list(PART_PURPOSES),
@@ -161,6 +251,8 @@ async def upload_images(
         ).count()
         if part_total + len(files) > settings.MAX_IMAGES_PER_SESSION:
             raise AppError(f"零件图合计最多上传 {settings.MAX_IMAGES_PER_SESSION} 张")
+        if len(files) > settings.MAX_IMAGES_PER_SESSION:
+            raise AppError(f"单次最多上传 {settings.MAX_IMAGES_PER_SESSION} 张图片")
 
     logger.info(
         "Upload images start | public_id=%s | purpose=%s | count=%s | existing=%s",
@@ -179,7 +271,9 @@ async def upload_images(
         phash = compute_phash(jpeg_bytes)
         object_key = f"sessions/{session.public_id}/{purpose}/{uuid.uuid4().hex}.jpg"
         storage.put_bytes(object_key, jpeg_bytes, "image/jpeg")
-        order = sort_order if purpose != "part" else existing + index
+        order = sort_order + index if purpose == PART_IMAGE_PURPOSE else sort_order
+        if purpose == PART_IMAGE_PURPOSE and sort_order == 0:
+            order = existing + index
         image = await UploadedImage.create(
             session_id=session.id,
             object_key=object_key,
@@ -207,6 +301,35 @@ async def upload_images(
     await session.save()
     logger.info("Upload images done | public_id=%s | saved=%s", session.public_id, len(saved))
     return APIResponse(data=await serialize_session(session), message=f"已上传 {len(saved)} 张图片")
+
+
+@router.put("/{public_id}/image-focus-points", response_model=APIResponse)
+async def save_image_focus_points(
+    payload: ImageFocusPointsIn,
+    session: RecognitionSession = Depends(get_recognition_session),
+) -> APIResponse:
+    ids = [item.image_id for item in payload.items]
+    images = await UploadedImage.filter(id__in=ids, session_id=session.id, deleted_at=None)
+    by_id = {img.id: img for img in images}
+    missing = [i for i in ids if i not in by_id]
+    if missing:
+        raise AppError(f"图片不属于当前会话: {missing}", code="invalid_request")
+    for item in payload.items:
+        image = by_id[item.image_id]
+        if image.purpose not in PART_PURPOSES:
+            raise AppError("仅零件图可设置焦点", code="invalid_request")
+        image.focus_point = {
+            "x": float(item.x),
+            "y": float(item.y),
+            "source": (item.source or "user_tap")[:32],
+        }
+        await image.save()
+    logger.info(
+        "Saved image focus points | public_id=%s | count=%s",
+        session.public_id,
+        len(payload.items),
+    )
+    return APIResponse(data=await serialize_session(session), message="已保存焦点")
 
 
 @router.post("/{public_id}/start", response_model=APIResponse)
@@ -341,7 +464,9 @@ async def set_vehicle_filter(
 @router.post("/{public_id}/oe-ocr", response_model=APIResponse)
 async def oe_ocr_from_latest_label(session: RecognitionSession = Depends(get_recognition_session)) -> APIResponse:
     await ensure_auto_part(session)
-    image = await UploadedImage.filter(session_id=session.id, purpose="oe_label", deleted_at=None).order_by("-id").first()
+    image = await UploadedImage.filter(
+        session_id=session.id, purpose=OE_LABEL_PURPOSE, deleted_at=None
+    ).order_by("-id").first()
     if not image:
         raise AppError("请先上传铭牌/包装图片")
     logger.info("OE OCR start | public_id=%s | image_id=%s", session.public_id, image.id)
@@ -383,6 +508,32 @@ async def confirm_oe(
 @router.get("/{public_id}/products", response_model=APIResponse)
 async def search_products(session: RecognitionSession = Depends(get_recognition_session)) -> APIResponse:
     await ensure_auto_part(session)
+
+    # Prefer exact SKU snapshot from 360 gallery match.
+    retrieval = await RetrievalResult.filter(session_id=session.id).order_by("-id").first()
+    if retrieval and retrieval.accepted and retrieval.matched_sku:
+        snapshot = await ProductQuerySnapshot.filter(session_id=session.id).order_by("-id").first()
+        if snapshot and snapshot.result_payload:
+            logger.info(
+                "Return SKU match products | public_id=%s | sku=%s | count=%s",
+                session.public_id,
+                retrieval.matched_sku,
+                snapshot.result_count,
+            )
+            return APIResponse(data=snapshot.result_payload)
+
+    # Category-level multi-SKU candidates from gallery (+ optional Vision).
+    if retrieval and retrieval.decision == "category_match":
+        snapshot = await ProductQuerySnapshot.filter(session_id=session.id).order_by("-id").first()
+        if snapshot and snapshot.result_payload:
+            logger.info(
+                "Return category match products | public_id=%s | category=%s | count=%s",
+                session.public_id,
+                retrieval.selected_category_id,
+                snapshot.result_count,
+            )
+            return APIResponse(data=snapshot.result_payload)
+
     if not session.confirmed_category_name and not session.oe_number:
         raise AppError("请先确认品类或输入 OE 号")
 
@@ -404,12 +555,58 @@ async def search_products(session: RecognitionSession = Depends(get_recognition_
     payload = [ProductOut(**p.model_dump()).model_dump() for p in products]
     await ProductQuerySnapshot.create(
         session_id=session.id,
-        query_payload=query,
+        query_payload={**query, "stage": "mdm_products", "attribute_filters": {}},
         result_payload=payload,
         result_count=len(payload),
     )
     logger.info("Search products done | public_id=%s | count=%s", session.public_id, len(payload))
     return APIResponse(data=payload)
+
+
+@router.post("/{public_id}/force-vision-fallback", response_model=APIResponse)
+async def force_vision_fallback(session: RecognitionSession = Depends(get_recognition_session)) -> APIResponse:
+    """User rejects SKU/category match; re-run DeepSeek vision on the same part images."""
+    image_count = await UploadedImage.filter(
+        session_id=session.id,
+        purpose__in=list(PART_PURPOSES),
+        deleted_at=None,
+    ).count()
+    if image_count == 0:
+        raise AppError("请先上传零件图片")
+
+    session.status = "processing"
+    session.error_message = None
+    await session.save()
+    logger.info("Force vision fallback | public_id=%s | images=%s", session.public_id, image_count)
+
+    # Mark prior retrieval so products API falls through to MDM.
+    latest_retrieval = await RetrievalResult.filter(session_id=session.id).order_by("-id").first()
+    if latest_retrieval and (
+        latest_retrieval.accepted or latest_retrieval.decision == "category_match"
+    ):
+        latest_retrieval.accepted = False
+        latest_retrieval.decision = "vision_fallback"
+        latest_retrieval.fallback_reason = (
+            "user_rejected_sku_match"
+            if latest_retrieval.matched_sku
+            else "user_rejected_category_match"
+        )
+        await latest_retrieval.save()
+
+    from app.tasks.dispatcher import dispatch_vision_fallback_only
+
+    mode = await dispatch_vision_fallback_only(session.id, session.public_id)
+    session = await RecognitionSession.get(id=session.id)
+    logger.info(
+        "Force vision fallback dispatched | public_id=%s | mode=%s | status=%s",
+        session.public_id,
+        mode,
+        session.status,
+    )
+    return APIResponse(
+        data=await serialize_session(session),
+        message="识别完成" if session.status == "done" else "已改用原识别方式，处理中…",
+    )
 
 
 @router.post("/{public_id}/feedback", response_model=APIResponse)

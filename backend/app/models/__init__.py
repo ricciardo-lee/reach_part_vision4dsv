@@ -21,7 +21,9 @@ class AdminUser(models.Model, TimestampMixin):
     last_login_at = fields.DatetimeField(null=True)
 
     class Meta:
-        table = "admin_users"
+        # Shared databases may already have another service's admin_users
+        # (UUID id + role_id). Keep this app's accounts in a separate table.
+        table = "vision_admin_users"
 
 
 class DeviceSession(models.Model, TimestampMixin):
@@ -77,6 +79,9 @@ class UploadedImage(models.Model, TimestampMixin):
     phash = fields.CharField(max_length=64, null=True, db_index=True)
     purpose = fields.CharField(max_length=32, default="part")
     sort_order = fields.IntField(default=0)
+    focus_point = fields.JSONField(null=True)
+    foreground_object_key = fields.CharField(max_length=255, null=True)
+    foreground_source = fields.CharField(max_length=32, null=True)
     expires_at = fields.DatetimeField()
     deleted_at = fields.DatetimeField(null=True)
 
@@ -106,6 +111,37 @@ class RecognitionResult(models.Model, TimestampMixin):
 
     class Meta:
         table = "recognition_results"
+
+
+class RetrievalResult(models.Model, TimestampMixin):
+    """360 gallery SKU retrieval snapshot for a recognition session."""
+
+    id = fields.IntField(primary_key=True)
+    session: fields.ForeignKeyRelation[RecognitionSession] = fields.ForeignKeyField(
+        "models.RecognitionSession", related_name="retrieval_results"
+    )
+    index_version = fields.CharField(max_length=128, null=True)
+    embedding_model = fields.CharField(max_length=128, null=True)
+    decision = fields.CharField(max_length=32, null=True)
+    confidence_level = fields.CharField(max_length=16, null=True)
+    accepted = fields.BooleanField(default=False)
+    matched_sku = fields.CharField(max_length=64, null=True)
+    score = fields.FloatField(null=True)
+    margin = fields.FloatField(null=True)
+    selected_category_id = fields.CharField(max_length=64, null=True)
+    selected_category_cn = fields.CharField(max_length=128, null=True)
+    category_confidence = fields.FloatField(null=True)
+    vision_assisted = fields.BooleanField(default=False)
+    candidates = fields.JSONField(null=True)
+    quality_warnings = fields.JSONField(null=True)
+    fallback_reason = fields.CharField(max_length=128, null=True)
+    latency_ms = fields.FloatField(null=True)
+    image_count = fields.IntField(default=0)
+    success = fields.BooleanField(default=False)
+    error_message = fields.CharField(max_length=512, null=True)
+
+    class Meta:
+        table = "retrieval_results"
 
 
 class OeOcrResult(models.Model, TimestampMixin):
@@ -177,4 +213,5 @@ class AuditLog(models.Model, TimestampMixin):
     ip_address = fields.CharField(max_length=64, null=True)
 
     class Meta:
-        table = "audit_logs"
+        # Shared databases may already have another service's audit_logs.
+        table = "vision_audit_logs"

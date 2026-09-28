@@ -6,5 +6,5 @@ source "$ROOT/scripts/common.sh"
 activate_python
 load_env
 ensure_redis
-exec celery -A app.tasks.celery_app.celery_app worker -l info --concurrency=2 \
+exec celery -A app.tasks.celery_app.celery_app worker -l info --concurrency="${CELERY_WORKER_CONCURRENCY:-1}" \
   --without-heartbeat --without-mingle --without-gossip

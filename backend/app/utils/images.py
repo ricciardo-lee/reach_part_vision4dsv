@@ -5,7 +5,7 @@ import io
 from pathlib import Path
 from typing import Tuple
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.core.constants import ALLOWED_IMAGE_CONTENT_TYPES, ALLOWED_IMAGE_EXTENSIONS
 from app.core.exceptions import AppError
@@ -31,7 +31,7 @@ def open_image(data: bytes) -> Image.Image:
 
 
 def compress_to_jpeg_bytes(data: bytes, max_side: int = 2048, quality: int = 90) -> Tuple[bytes, int, int]:
-    image = open_image(data).convert("RGB")
+    image = ImageOps.exif_transpose(open_image(data)).convert("RGB")
     image.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=quality)

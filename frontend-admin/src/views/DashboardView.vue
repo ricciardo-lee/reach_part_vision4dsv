@@ -37,6 +37,22 @@
         <div class="label">🏷️ 已标注会话</div>
         <div class="value">{{ stats.labeled_sessions ?? '-' }}</div>
       </div>
+      <div class="stat-item">
+        <div class="label">图库直匹配</div>
+        <div class="value">{{ stats.sku_match_sessions ?? '-' }}</div>
+      </div>
+      <div class="stat-item">
+        <div class="label">图库直匹配率</div>
+        <div class="value">{{ fmtPct(stats.sku_match_rate) }}</div>
+      </div>
+      <div class="stat-item">
+        <div class="label">品类候选</div>
+        <div class="value">{{ stats.category_match_sessions ?? '-' }}</div>
+      </div>
+      <div class="stat-item">
+        <div class="label">品类候选率</div>
+        <div class="value">{{ fmtPct(stats.category_match_rate) }}</div>
+      </div>
     </div>
     <div class="page-card">
       <h3>🚀 快捷入口</h3>

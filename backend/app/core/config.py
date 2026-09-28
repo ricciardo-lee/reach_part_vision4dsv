@@ -65,7 +65,8 @@ class Settings(BaseSettings):
     MINIO_BUCKET: str = "part-vision"
     MINIO_SECURE: bool = False
     MINIO_PUBLIC_BASE_URL: str = ""
-    STORAGE_BACKEND: str = "auto"  # auto | minio | local
+    # auto: development 用本地磁盘，production 用 MinIO。也可显式设 local | minio。
+    STORAGE_BACKEND: str = "auto"
     LOCAL_STORAGE_DIR: str = "uploads"
 
     DEEPSEEK_API_KEY: str = ""
@@ -85,11 +86,44 @@ class Settings(BaseSettings):
     MDM_COUNTRY: str = ""
 
     MAX_UPLOAD_MB: int = 10
-    MAX_IMAGES_PER_SESSION: int = 4
+    MAX_IMAGES_PER_SESSION: int = 8
     IMAGE_RETENTION_DAYS: int = 30
     DEVICE_SESSION_TTL_HOURS: int = 72
     RATE_LIMIT_PER_MINUTE: int = 30
     EVAL_REJECT_CONFIDENCE: float = 0.45
+
+    # 360 SKU retrieval (DINOv2 + Qdrant)
+    RETRIEVAL_ENABLED: bool = True
+    EMBEDDING_BACKEND: str = "dinov2"
+    EMBEDDING_MODEL_ID: str = "facebook/dinov2-base"
+    VECTOR_BACKEND: str = "qdrant"  # qdrant | memory
+    QDRANT_URL: str = "http://127.0.0.1:6333"
+    QDRANT_API_KEY: str | None = None
+    QDRANT_COLLECTION: str = "parts_360_current"
+    SEARCH_INDEX_DIR: str = "data/indexes"
+    SEARCH_INDEX_VERSION: str | None = None
+    SEARCH_AGGREGATE: str = "topm_mean"
+    SEARCH_TOPM: int = 3
+    SEARCH_PER_IMAGE_TOP_K: int = 30
+    SEARCH_HIGH_SCORE: float = 0.72
+    SEARCH_MEDIUM_SCORE: float = 0.55
+    SEARCH_MIN_MARGIN: float = 0.03
+    # Category-level match: keep same-category SKUs when SKU gate fails but retrieval is medium+.
+    SEARCH_CATEGORY_MIN_SCORE: float = 0.55
+    SEARCH_CATEGORY_TOP_N: int = 5
+    SEARCH_CATEGORY_RELATIVE_FLOOR: float = 0.85  # keep SKU if score >= top_in_category * floor
+    SEARCH_VISION_CATEGORY_MIN_CONFIDENCE: float = 0.6
+    SEARCH_ENABLE_DUAL_PATH: bool = False
+    SEARCH_TARGET_SIZE: int = 224
+    SEARCH_ENABLE_FOREGROUND: bool = True
+    SEARCH_SEGMENT_ENABLED: bool = True
+    SEARCH_SEGMENT_DEVICE: str = "auto"
+    SEARCH_SEGMENT_MIN_AREA: float = 0.02
+    SEARCH_SEGMENT_MAX_AREA: float = 0.92
+    SEARCH_SEGMENT_CROP_MARGIN: float = 0.05
+    SEARCH_MATTING_MODEL_ID: str = "ZhengPeng7/BiRefNet"
+    SEARCH_MATTING_INPUT_SIZE: int = 1024
+    CELERY_WORKER_CONCURRENCY: int = 1
 
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "Admin@123456"
@@ -117,6 +151,24 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return self.MAX_UPLOAD_MB * 1024 * 1024
+
+    @property
+    def resolved_storage_backend(self) -> str:
+        """local | minio. auto 在非 production 环境不连接 MinIO。"""
+        raw = (self.STORAGE_BACKEND or "auto").strip().lower()
+        if raw in {"local", "minio"}:
+            return raw
+        if (self.APP_ENV or "").strip().lower() == "production":
+            return "minio"
+        return "local"
+
+    @property
+    def resolved_embedding_model_id(self) -> str:
+        if self.EMBEDDING_MODEL_ID:
+            return self.EMBEDDING_MODEL_ID
+        if self.EMBEDDING_BACKEND.lower() == "dinov2":
+            return "facebook/dinov2-base"
+        return "facebook/dinov2-base"
 
     @property
     def tortoise_config(self) -> dict:

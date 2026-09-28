@@ -66,10 +66,10 @@ def test_index_eligible_and_select(tmp_path: Path):
     eligible = eligible_groups(groups)
     assert [group.material_code for group in eligible] == ["1.71.12113"]
 
-    upload = select_upload_images(groups["1.71.12113"], max_images=4)
+    upload = select_upload_images(groups["1.71.12113"], max_images=8)
     assert upload.overall.angle == "01"
-    assert [photo.angle for photo in upload.others] == ["02", "03", "04"]
-    assert len(upload.all_photos) == 4
+    assert [photo.angle for photo in upload.others] == ["02", "03", "04", "05"]
+    assert len(upload.all_photos) == 5
     assert "01" in upload.angles
 
 
@@ -77,9 +77,18 @@ def test_select_upload_images_minimum_two(tmp_path: Path):
     _write_photo(tmp_path, "1.40.10001", "01")
     _write_photo(tmp_path, "1.40.10001", "04")
     group = index_photos(tmp_path)["1.40.10001"]
-    upload = select_upload_images(group, max_images=4)
+    upload = select_upload_images(group, max_images=8)
     assert len(upload.all_photos) == 2
     assert upload.angles == ["01", "04"]
+
+
+def test_select_upload_images_caps_at_eight(tmp_path: Path):
+    for angle in range(1, 12):
+        _write_photo(tmp_path, "1.71.12113", f"{angle:02d}")
+    group = index_photos(tmp_path)["1.71.12113"]
+    upload = select_upload_images(group, max_images=8)
+    assert len(upload.all_photos) == 8
+    assert upload.overall.angle == "01"
 
 
 def test_sample_by_prefix_respects_count_and_seed(tmp_path: Path):

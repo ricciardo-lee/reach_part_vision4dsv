@@ -1,6 +1,6 @@
 # Reach Part Vision（汽配零件视觉识别服务）
 
-手机浏览器上传零件实拍图 → DeepSeek Vision 识别品类 → 选择车型 / 输入 OE → 返回公司产品信息。
+手机浏览器上传零件实拍图（同一产品最多 8 张多角度）→ 优先 360 图库 SKU 直匹配 → 未命中再 DeepSeek Vision 识别品类 → 选择车型 / 输入 OE → 返回公司产品信息。
 
 ## 目录结构
 
@@ -19,7 +19,7 @@ scripts/           本地辅助脚本
 
 ## 重要约束
 
-1. **不要使用 Docker**（当前阶段）。
+1. **本地开发不用 Docker**。线上部署见 [deploy/README.md](deploy/README.md)。
 2. MySQL 必须使用独立库 `reach_part_vision4dsv`，禁止连接 MDM 的 `ReachMDM_LMR`。
 3. DeepSeek API Key、数据库密码等全部放在 `backend/.env`，不要写入源码。
 
@@ -33,7 +33,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env：填写 MYSQL_*、REDIS_*、MINIO_*、DEEPSEEK_API_KEY
+# 编辑 .env：填写 MYSQL_*、REDIS_*、DEEPSEEK_API_KEY（本地不必配 MinIO）
 ```
 
 ### 2. 创建独立数据库
@@ -44,7 +44,9 @@ source .venv/bin/activate
 python -m app.scripts.init_db
 ```
 
-### 3. 初始化 MinIO Bucket
+### 3. 存储
+
+本地默认把上传图写到 `backend/uploads/`，不连接 MinIO。线上把 `APP_ENV=production`（或 `STORAGE_BACKEND=minio`）后再初始化桶：
 
 ```bash
 python -m app.scripts.init_minio
@@ -144,16 +146,41 @@ Token 临期时主动刷新，并在业务请求收到 401 时强制刷新一次
 |------|------|------|
 | POST | `/api/v1/public/sessions/device` | 创建设备匿名会话 |
 | POST | `/api/v1/public/recognize` | 创建识别会话 |
-| POST | `/api/v1/public/recognize/{id}/images` | 上传零件图（可按角度 purpose）或铭牌图 |
-| POST | `/api/v1/public/recognize/{id}/start` | 启动视觉识别 |
+| POST | `/api/v1/public/recognize/{id}/images` | 上传零件图（同一产品最多 8 张，`purpose=part`）或铭牌图 |
+| POST | `/api/v1/public/recognize/{id}/start` | 启动识别（优先 360 图库 SKU 匹配，未命中再 DeepSeek） |
+| POST | `/api/v1/public/recognize/{id}/force-vision-fallback` | 用户拒绝 SKU 直匹配后强制走原识别 |
 | POST | `/api/v1/public/recognize/{id}/confirm-category` | 确认品类 |
 | POST | `/api/v1/public/recognize/{id}/consent` | 设置优化授权 |
 | POST | `/api/v1/public/recognize/{id}/consent/revoke` | 撤回优化授权 |
 | POST | `/api/v1/public/recognize/{id}/oe-ocr` | 铭牌 OE 识别 |
 | POST | `/api/v1/public/recognize/{id}/oe-confirm` | 确认 OE |
-| GET  | `/api/v1/public/recognize/{id}/products` | 查询产品 |
+| GET  | `/api/v1/public/recognize/{id}/products` | 查询产品（SKU 直匹配优先返回快照） |
 | POST | `/api/v1/admin/auth/login` | 管理端登录 |
 | GET  | `/api/v1/admin/stats` | 含 Top-1 / Top-3 / 拒识率 |
+
+## 360 图库 SKU 直匹配
+
+识别启动后优先用 DINOv2 + Qdrant 对 1–8 张同产品多角度图做 SKU 检索：
+
+1. **高置信直匹配**（score ≥ `SEARCH_HIGH_SCORE` 且 Top1–Top2 margin ≥ `SEARCH_MIN_MARGIN`）→ 跳过 DeepSeek，直接返回公司 SKU  
+2. **未命中 / 低置信 / 检索不可用** → 自动回退现有 DeepSeek 品类识别 → 车型/OE → MDM 查询  
+3. 用户可在产品页点击「不是这个产品，改用原方式查询」强制 fallback
+
+### 导入索引到 Qdrant
+
+```bash
+# 需本机已启动 Qdrant（默认 http://127.0.0.1:6333）
+cd backend && source .venv/bin/activate
+PYTHONPATH=. python ../scripts/import_qdrant_index.py \
+  --index-dir ../data/indexes/dinov2_20260923T055903Z \
+  --qdrant-url http://127.0.0.1:6333
+```
+
+索引产物放在项目 `data/indexes/`（已 gitignore）。Worker 默认 `CELERY_WORKER_CONCURRENCY=1`，避免重复加载 DINOv2。
+
+关键环境变量见 `backend/.env.example`（`RETRIEVAL_ENABLED`、`QDRANT_*`、`SEARCH_*`）。
+
+就绪探针 `GET /ready` 会额外返回 `retrieval` 状态；检索不可用时整站仍可用，仅降级到原 DeepSeek 流程。
 
 ## 图片保留策略
 

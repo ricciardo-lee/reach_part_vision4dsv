@@ -11,7 +11,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 
 FILENAME_RE = re.compile(r"^(.+)-(\d{2})\.(jpe?g)$", re.IGNORECASE)
 OVERALL_ANGLE = "01"
-DEFAULT_MAX_IMAGES = 4
+DEFAULT_MAX_IMAGES = 8
 DEFAULT_PER_PREFIX = 10
 DEFAULT_SEED = 42
 

@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
         settings.APP_NAME,
         settings.APP_ENV,
         settings.MYSQL_DATABASE,
-        settings.STORAGE_BACKEND,
+        settings.resolved_storage_backend,
         settings.MDM_USE_MOCK,
         settings.DEEPSEEK_MODEL,
     )
@@ -75,7 +75,8 @@ def create_app() -> FastAPI:
 
     @app.get("/ready")
     async def ready() -> dict:
-        """Readiness: DB (via app up), Redis, and Celery workers when enabled."""
+        """Readiness: DB (via app up), Redis, Celery, and optional retrieval."""
+        from app.services.retrieval_runtime import retrieval_status
         from app.tasks.dispatcher import celery_workers_available
         from app.utils.redis_client import get_redis
 
@@ -85,6 +86,17 @@ def create_app() -> FastAPI:
         else:
             celery_status = "disabled"
 
+        # Do NOT eagerly load DINOv2 here — that belongs in Celery workers.
+        # Report last-known / config-level retrieval status only.
+        retrieval = retrieval_status()
+        if not retrieval.get("ready") and settings.RETRIEVAL_ENABLED:
+            retrieval = {
+                **retrieval,
+                "enabled": True,
+                "vector_backend": settings.VECTOR_BACKEND,
+                "note": "model loads lazily in Celery worker on first recognition",
+            }
+
         overall = "ok" if redis_ok and celery_status in {"ok", "disabled"} else "degraded"
         return {
             "status": overall,
@@ -93,6 +105,7 @@ def create_app() -> FastAPI:
             "redis": "ok" if redis_ok else "down",
             "celery": celery_status,
             "celery_enabled": settings.CELERY_ENABLED,
+            "retrieval": retrieval,
         }
 
     return app

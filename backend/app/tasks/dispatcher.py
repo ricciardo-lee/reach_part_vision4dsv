@@ -75,3 +75,36 @@ async def dispatch_vision_recognition(session_id: int, public_id: str) -> str:
         # Failure already persisted on the session by run_vision_recognition.
         logger.warning("Inline recognition failed | public_id=%s | error=%s", public_id, exc)
     return "inline"
+
+
+async def dispatch_vision_fallback_only(session_id: int, public_id: str) -> str:
+    """Queue or run DeepSeek-only path (skip SKU retrieval)."""
+    if settings.CELERY_ENABLED and celery_workers_available():
+        from app.models import RecognitionSession
+        from app.tasks.celery_app import run_vision_fallback_task
+
+        async_result = run_vision_fallback_task.delay(session_id)
+        session = await RecognitionSession.get(id=session_id)
+        session.task_id = async_result.id
+        await session.save()
+        logger.info(
+            "Vision fallback queued | public_id=%s | task_id=%s",
+            public_id,
+            async_result.id,
+        )
+        return "celery"
+
+    if settings.CELERY_ENABLED and not settings.CELERY_ALLOW_INLINE_FALLBACK:
+        raise AppError(
+            "识别队列未就绪：请先启动本地 Celery worker",
+            code="celery_unavailable",
+            status_code=503,
+        )
+
+    from app.services.recognition import run_vision_fallback_only
+
+    try:
+        await run_vision_fallback_only(session_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Inline vision fallback failed | public_id=%s | error=%s", public_id, exc)
+    return "inline"

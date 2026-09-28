@@ -113,11 +113,7 @@ ensure_redis() {
 
 nohup_cmd() {
   # Detach from controlling terminal so Cursor/shell exit won't kill services.
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$@" </dev/null
-  else
-    nohup "$@" </dev/null
-  fi
+  nohup "$@" </dev/null
 }
 
 start_bg() {
@@ -144,11 +140,19 @@ start_bg() {
   esac
   sleep 0.5
 
-  nohup_cmd "$@" >"$log_file" 2>&1 &
-  local pid=$!
-  echo "$pid" >"$pid_file"
+  # Fully detach: outer bash -c writes the real child PID, then exits.
+  # Avoids bash `local pid=$!` pitfalls and Cursor shell process-group cleanup.
+  /bin/bash -c '
+    log_file="$1"; pid_file="$2"; shift 2
+    nohup "$@" >>"$log_file" 2>&1 &
+    echo $! >"$pid_file"
+    disown $! 2>/dev/null || true
+  ' bash "$log_file" "$pid_file" "$@"
+
   sleep 1
-  if ! kill -0 "$pid" 2>/dev/null; then
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
     echo "ERROR $name exited immediately. See log: $log_file"
     tail -n 40 "$log_file" || true
     rm -f "$pid_file"

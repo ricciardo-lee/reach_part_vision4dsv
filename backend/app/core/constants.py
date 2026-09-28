@@ -30,6 +30,25 @@ ALLOWED_IMAGE_EXTENSIONS = {
     ".avif",
 }
 
+# Unified part-image purpose for multi-angle uploads (1–8 images).
+PART_IMAGE_PURPOSE = "part"
+# Legacy angle slots remain readable for old sessions.
+LEGACY_PART_PURPOSES = {
+    "part_overall",
+    "part_connector",
+    "part_label",
+    "part_other",
+}
+PART_PURPOSES = {PART_IMAGE_PURPOSE, *LEGACY_PART_PURPOSES}
+OE_LABEL_PURPOSE = "oe_label"
+
+CATEGORY_CN = {
+    "compressor": "压缩机",
+    "condenser": "冷凝器",
+    "fan": "风扇",
+    "radiator": "散热器",
+}
+
 ROLE_SUPERADMIN = "superadmin"
 ROLE_OPERATOR = "operator"
 ROLE_VIEWER = "viewer"

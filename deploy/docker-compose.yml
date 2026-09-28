@@ -1,0 +1,90 @@
+name: reach-part-vision
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    image: reach-part-vision-backend:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+    volumes:
+      - uploads:/data/uploads
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+  worker:
+    image: reach-part-vision-backend:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - models:/data/models
+      - indexes:/data/indexes
+      - uploads:/data/uploads
+    command:
+      - sh
+      - -c
+      - python /app/ensure_models.py && exec celery -A app.tasks.celery_app.celery_app worker -l info --concurrency=1
+
+  beat:
+    image: reach-part-vision-backend:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+      - worker
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app.celery_app
+      - beat
+      - -l
+      - info
+      - --schedule
+      - /tmp/celerybeat-schedule
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    image: reach-part-vision-web:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${H5_PORT:-80}:80"
+      - "${ADMIN_PORT:-8080}:8080"
+
+volumes:
+  models:
+  indexes:
+  uploads:
+  redis-data:

@@ -117,23 +117,12 @@ def get_storage():
     if _storage is not None:
         return _storage
 
-    backend = (settings.STORAGE_BACKEND or "auto").lower()
+    backend = settings.resolved_storage_backend
     if backend == "local":
         _storage = LocalStorage()
         logger.info("Using local disk storage at %s", _storage.root)
         return _storage
 
-    if backend == "minio":
-        _storage = MinioStorage()
-        return _storage
-
-    # auto: prefer MinIO, fallback to local
-    try:
-        candidate = MinioStorage()
-        candidate.ensure_bucket()
-        _storage = candidate
-        logger.info("Using MinIO storage")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("MinIO unavailable (%s), fallback to local storage", exc)
-        _storage = LocalStorage()
+    _storage = MinioStorage()
+    logger.info("Using MinIO storage at %s", settings.MINIO_ENDPOINT)
     return _storage

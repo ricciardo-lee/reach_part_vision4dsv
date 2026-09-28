@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, Query
 from tortoise.functions import Avg
 
 from app.api.deps import require_permission
+from app.core.constants import CATEGORY_CN
 from app.models import (
     AdminUser,
     AuditLog,
     CategoryMapping,
+    ProductQuerySnapshot,
     PromptConfig,
     RecognitionResult,
     RecognitionSession,
+    RetrievalResult,
 )
 from app.schemas import (
     APIResponse,
@@ -31,6 +34,63 @@ from app.tasks.dispatcher import dispatch_vision_recognition
 router = APIRouter(tags=["admin"])
 
 
+def _recognition_mode(
+    retrieval: RetrievalResult | None,
+    vision: RecognitionResult | None,
+) -> str | None:
+    if retrieval and retrieval.accepted:
+        return "sku_match"
+    if retrieval and retrieval.decision == "category_match":
+        return "category_match"
+    if vision or (retrieval and not retrieval.accepted):
+        return "vision_fallback"
+    return None
+
+
+def _category_from_retrieval(retrieval: RetrievalResult | None) -> str | None:
+    if not retrieval:
+        return None
+    if getattr(retrieval, "selected_category_cn", None):
+        return retrieval.selected_category_cn
+    if getattr(retrieval, "selected_category_id", None):
+        return CATEGORY_CN.get(retrieval.selected_category_id, retrieval.selected_category_id)
+    candidates = retrieval.candidates or []
+    if not candidates:
+        return None
+    top = candidates[0] if isinstance(candidates[0], dict) else {}
+    return (
+        top.get("category_cn")
+        or CATEGORY_CN.get(str(top.get("category_id") or ""), None)
+        or top.get("category_id")
+    )
+
+
+def _serialize_retrieval(r: RetrievalResult) -> dict[str, Any]:
+    return {
+        "id": r.id,
+        "accepted": bool(r.accepted),
+        "decision": r.decision,
+        "confidence_level": r.confidence_level,
+        "matched_sku": r.matched_sku,
+        "score": r.score,
+        "margin": r.margin,
+        "selected_category_id": getattr(r, "selected_category_id", None),
+        "selected_category_cn": getattr(r, "selected_category_cn", None),
+        "category_confidence": getattr(r, "category_confidence", None),
+        "vision_assisted": bool(getattr(r, "vision_assisted", False)),
+        "candidates": r.candidates or [],
+        "fallback_reason": r.fallback_reason,
+        "index_version": r.index_version,
+        "embedding_model": r.embedding_model,
+        "latency_ms": r.latency_ms,
+        "image_count": r.image_count,
+        "quality_warnings": r.quality_warnings,
+        "success": r.success,
+        "error_message": r.error_message,
+        "created_at": r.created_at,
+    }
+
+
 @router.get("/stats", response_model=APIResponse)
 async def stats(admin: AdminUser = Depends(require_permission("stats:read"))) -> APIResponse:
     total = await RecognitionSession.all().count()
@@ -42,6 +102,25 @@ async def stats(admin: AdminUser = Depends(require_permission("stats:read"))) ->
     feedback_correct = await RecognitionSession.filter(feedback_correct=True).count()
     rate = (feedback_correct / feedback_total) if feedback_total else None
     eval_stats = await compute_eval_stats(reject_confidence=settings.EVAL_REJECT_CONFIDENCE)
+
+    # SKU / category match stats among done sessions.
+    done_sessions = await RecognitionSession.filter(status="done").all()
+    sku_match_sessions = 0
+    category_match_sessions = 0
+    vision_fallback_sessions = 0
+    for session in done_sessions:
+        retrieval = await RetrievalResult.filter(session_id=session.id).order_by("-id").first()
+        vision = await RecognitionResult.filter(session_id=session.id, success=True).order_by("-id").first()
+        mode = _recognition_mode(retrieval, vision)
+        if mode == "sku_match":
+            sku_match_sessions += 1
+        elif mode == "category_match":
+            category_match_sessions += 1
+        elif mode == "vision_fallback":
+            vision_fallback_sessions += 1
+    sku_match_rate = (sku_match_sessions / success) if success else None
+    category_match_rate = (category_match_sessions / success) if success else None
+
     return APIResponse(
         data=StatsOut(
             total_sessions=total,
@@ -53,6 +132,11 @@ async def stats(admin: AdminUser = Depends(require_permission("stats:read"))) ->
             top3_hit_rate=eval_stats.top3_hit_rate,
             reject_rate=eval_stats.reject_rate,
             labeled_sessions=eval_stats.labeled_sessions,
+            sku_match_sessions=sku_match_sessions,
+            category_match_sessions=category_match_sessions,
+            vision_fallback_sessions=vision_fallback_sessions,
+            sku_match_rate=round(sku_match_rate, 4) if sku_match_rate is not None else None,
+            category_match_rate=round(category_match_rate, 4) if category_match_rate is not None else None,
         )
     )
 
@@ -61,8 +145,12 @@ async def stats(admin: AdminUser = Depends(require_permission("stats:read"))) ->
 async def list_sessions(
     status: Optional[str] = None,
     feedback_correct: Optional[bool] = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    recognition_mode: Annotated[
+        Optional[str],
+        Query(description="sku_match | category_match | vision_fallback"),
+    ] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     admin: AdminUser = Depends(require_permission("session:read")),
 ) -> APIResponse:
     query = RecognitionSession.all().order_by("-id")
@@ -70,11 +158,40 @@ async def list_sessions(
         query = query.filter(status=status)
     if feedback_correct is not None:
         query = query.filter(feedback_correct=feedback_correct)
-    total = await query.count()
-    items = await query.offset((page - 1) * page_size).limit(page_size)
+
+    # Mode filter requires per-session retrieval/vision; filter after fetch when set.
+    if recognition_mode in {"sku_match", "category_match", "vision_fallback"}:
+        candidates = await query.all()
+        filtered: list[RecognitionSession] = []
+        for item in candidates:
+            retrieval = await RetrievalResult.filter(session_id=item.id).order_by("-id").first()
+            vision = await RecognitionResult.filter(session_id=item.id, success=True).order_by("-id").first()
+            if _recognition_mode(retrieval, vision) == recognition_mode:
+                filtered.append(item)
+        total = len(filtered)
+        items = filtered[(page - 1) * page_size : page * page_size]
+    else:
+        total = await query.count()
+        items = await query.offset((page - 1) * page_size).limit(page_size)
+
     data = []
     for item in items:
         latest = await RecognitionResult.filter(session_id=item.id).order_by("-id").first()
+        retrieval = await RetrievalResult.filter(session_id=item.id).order_by("-id").first()
+        mode = _recognition_mode(retrieval, latest if latest and latest.success else None)
+        if mode == "sku_match" and retrieval:
+            part_name = item.confirmed_category_name or _category_from_retrieval(retrieval)
+            confidence = retrieval.score
+        elif mode == "category_match" and retrieval:
+            part_name = (
+                item.confirmed_category_name
+                or retrieval.selected_category_cn
+                or _category_from_retrieval(retrieval)
+            )
+            confidence = retrieval.category_confidence or retrieval.score
+        else:
+            part_name = latest.part_name if latest else None
+            confidence = latest.confidence if latest else None
         data.append(
             {
                 "public_id": item.public_id,
@@ -82,8 +199,17 @@ async def list_sessions(
                 "task_id": item.task_id,
                 "confirmed_category_name": item.confirmed_category_name,
                 "oe_number": item.oe_number,
-                "part_name": latest.part_name if latest else None,
-                "confidence": latest.confidence if latest else None,
+                "part_name": part_name,
+                "confidence": confidence,
+                "recognition_mode": mode,
+                "matched_sku": retrieval.matched_sku if retrieval and retrieval.accepted else None,
+                "selected_category_id": getattr(retrieval, "selected_category_id", None) if retrieval else None,
+                "selected_category_cn": getattr(retrieval, "selected_category_cn", None) if retrieval else None,
+                "vision_assisted": bool(getattr(retrieval, "vision_assisted", False)) if retrieval else False,
+                "retrieval_score": retrieval.score if retrieval else None,
+                "retrieval_margin": retrieval.margin if retrieval else None,
+                "retrieval_accepted": bool(retrieval.accepted) if retrieval else False,
+                "fallback_reason": retrieval.fallback_reason if retrieval else None,
                 "created_at": item.created_at,
                 "error_message": item.error_message,
                 "feedback_correct": item.feedback_correct,
@@ -101,8 +227,14 @@ async def session_detail(
     if not session:
         raise NotFoundError()
     results = await RecognitionResult.filter(session_id=session.id).order_by("-id")
+    retrievals = await RetrievalResult.filter(session_id=session.id).order_by("-id")
+    latest_vision = next((r for r in results if r.success), None)
+    latest_retrieval = retrievals[0] if retrievals else None
+    mode = _recognition_mode(latest_retrieval, latest_vision)
+    snapshot = await ProductQuerySnapshot.filter(session_id=session.id).order_by("-id").first()
     return APIResponse(
         data={
+            "recognition_mode": mode,
             "session": {
                 "public_id": session.public_id,
                 "status": session.status,
@@ -121,15 +253,31 @@ async def session_detail(
                 "error_message": session.error_message,
                 "created_at": session.created_at,
             },
+            "retrieval_results": [_serialize_retrieval(r) for r in retrievals],
+            "product_snapshot": (
+                {
+                    "query_payload": snapshot.query_payload,
+                    "result_payload": snapshot.result_payload,
+                    "result_count": snapshot.result_count,
+                    "created_at": snapshot.created_at,
+                }
+                if snapshot
+                else None
+            ),
             "results": [
                 {
                     "id": r.id,
+                    "model_name": r.model_name,
+                    "prompt_version": r.prompt_version,
                     "part_name": r.part_name,
                     "confidence": r.confidence,
                     "reason": r.reason,
                     "candidates": r.candidates,
                     "mapped_category_code": r.mapped_category_code,
                     "mapped_category_name": r.mapped_category_name,
+                    "is_auto_part": r.is_auto_part,
+                    "raw_response": r.raw_response,
+                    "token_usage": r.token_usage,
                     "success": r.success,
                     "latency_ms": r.latency_ms,
                     "error_message": r.error_message,

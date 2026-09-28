@@ -9,8 +9,13 @@
       </van-steps>
     </section>
 
+    <QueryImageGallery :images="store.session?.images || []" />
+
     <section class="card">
       <h2 class="title-row"><span class="emoji" aria-hidden="true">🤖</span> 识别结果</h2>
+      <p v-if="store.session?.recognition_mode === 'vision_fallback'" class="muted" style="margin-bottom: 8px">
+        图库未直接命中产品，已改用品类识别；请确认品类后查询公司产品。
+      </p>
       <template v-if="isAutoPart">
         <p v-if="result">
           最可能品类：<strong>{{ result.mapped_category_name || result.part_name }}</strong>
@@ -153,6 +158,7 @@ import { showToast } from 'vant'
 import api from '@/api/client'
 import { useRecognitionStore } from '@/stores/recognition'
 import IndexedOptionSheet from '@/components/IndexedOptionSheet.vue'
+import QueryImageGallery from '@/components/QueryImageGallery.vue'
 
 const router = useRouter()
 const store = useRecognitionStore()

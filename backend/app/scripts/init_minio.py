@@ -15,7 +15,7 @@ from app.utils.minio_client import get_storage  # noqa: E402
 def main() -> None:
     storage = get_storage()
     storage.ensure_bucket()
-    print(f"MinIO bucket ready: {storage.bucket}")
+    print(f"Storage ready: {type(storage).__name__} bucket={storage.bucket}")
 
 
 if __name__ == "__main__":

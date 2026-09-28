@@ -174,6 +174,104 @@ class DeepSeekVisionClient:
         )
         return result, usage, latency_ms, payload
 
+    def classify_parts_constrained(
+        self,
+        image_bytes_list: List[bytes],
+        allowed_categories: List[dict],
+    ) -> tuple[VisionResult, dict, int, dict]:
+        """Vision category pick restricted to retrieval candidate categories.
+
+        allowed_categories: list of {category_id, category_cn}.
+        """
+        if not image_bytes_list:
+            raise AppError("缺少识别图片", code="invalid_image")
+        if not allowed_categories:
+            raise AppError("缺少候选品类", code="invalid_request")
+
+        lines = []
+        id_set: set[str] = set()
+        cn_to_id: dict[str, str] = {}
+        for item in allowed_categories:
+            cid = str(item.get("category_id") or "").strip()
+            cn = str(item.get("category_cn") or "").strip()
+            if not cid:
+                continue
+            id_set.add(cid)
+            if cn:
+                cn_to_id[cn] = cid
+            lines.append(f"- category_id={cid}, category_cn={cn or cid}")
+
+        allowed_block = "\n".join(lines)
+        prompt = (
+            "你是汽车零件识别助手。请根据图片在下方「允许的品类列表」中选择最匹配的一个品类。"
+            "严禁输出列表之外的品类。若无法判断，将 is_auto_part 设为 false。\n"
+            "只返回 JSON：\n"
+            "{\n"
+            '  "is_auto_part": true,\n'
+            '  "category_id": "压缩机对应的 category_id",\n'
+            '  "part_name": "中文品类名",\n'
+            '  "confidence": 0.0-1.0,\n'
+            '  "reason": "简短依据"\n'
+            "}\n\n"
+            f"允许的品类列表：\n{allowed_block}"
+        )
+        payload, usage, latency_ms = self._chat_json(prompt, image_bytes_list)
+
+        raw_id = str(payload.get("category_id") or "").strip()
+        part_name = str(payload.get("part_name") or payload.get("零件名称") or "").strip()
+        confidence = _normalize_confidence(payload.get("confidence", payload.get("置信度", 0.0)))
+        reason = str(payload.get("reason") or payload.get("判断依据") or "").strip()
+
+        # Map Chinese name → id when model returns name only.
+        if raw_id not in id_set and part_name in cn_to_id:
+            raw_id = cn_to_id[part_name]
+        if raw_id not in id_set:
+            # Reverse lookup via CATEGORY_CN values matching part_name
+            from app.core.constants import CATEGORY_CN
+
+            for cid, cn in CATEGORY_CN.items():
+                if cid in id_set and (part_name == cn or raw_id == cn):
+                    raw_id = cid
+                    part_name = cn
+                    break
+
+        in_allowlist = raw_id in id_set
+        if in_allowlist and not part_name:
+            from app.core.constants import CATEGORY_CN
+
+            part_name = CATEGORY_CN.get(raw_id, raw_id)
+            payload["category_id"] = raw_id
+            payload["part_name"] = part_name
+
+        is_auto_part = bool(payload.get("is_auto_part", True)) and in_allowlist and bool(part_name)
+        if not in_allowlist:
+            reason = (reason + " | out_of_allowlist").strip(" |")
+            is_auto_part = False
+
+        result = VisionResult(
+            is_auto_part=is_auto_part,
+            part_name=part_name or "未知零件",
+            confidence=confidence if is_auto_part else 0.0,
+            reason=reason,
+            candidates=(
+                [VisionCandidate(name=part_name, confidence=confidence)] if is_auto_part and part_name else []
+            ),
+        )
+        # Stash resolved category_id for callers.
+        payload = dict(payload)
+        payload["category_id"] = raw_id if in_allowlist else None
+        payload["constrained"] = True
+        payload["in_allowlist"] = in_allowlist
+
+        logger.info(
+            "Constrained classify | category_id=%s | part=%s | conf=%s | in_allowlist=%s",
+            payload.get("category_id"),
+            result.part_name,
+            result.confidence,
+            in_allowlist,
+        )
+        return result, usage, latency_ms, payload
+
     def extract_oe_numbers(self, image_bytes: bytes, prompt: Optional[str] = None) -> tuple[OeOcrParsed, dict, int, dict]:
         payload, usage, latency_ms = self._chat_json(prompt or DEFAULT_OE_OCR_PROMPT, [image_bytes])
         oe_numbers = payload.get("oe_numbers") or payload.get("oe") or []
