@@ -2,6 +2,7 @@ name: reach-part-vision
 
 services:
   redis:
+    container_name: parts-vision-redis
     image: redis:7-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
@@ -9,11 +10,13 @@ services:
       - redis-data:/data
 
   api:
+    container_name: parts-vision-api
     build:
       context: ..
       dockerfile: deploy/Dockerfile.backend
       args:
-        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://mirrors.tuna.tsinghua.edu.cn/pytorch-wheels/cpu}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
     image: reach-part-vision-backend:${IMAGE_TAG:-local}
     restart: unless-stopped
     env_file: .env
@@ -32,6 +35,7 @@ services:
       start_period: 30s
 
   worker:
+    container_name: parts-vision-worker
     image: reach-part-vision-backend:${IMAGE_TAG:-local}
     restart: unless-stopped
     env_file: .env
@@ -52,6 +56,7 @@ services:
       - python /app/ensure_models.py && exec celery -A app.tasks.celery_app.celery_app worker -l info --concurrency=1
 
   beat:
+    container_name: parts-vision-beat
     image: reach-part-vision-backend:${IMAGE_TAG:-local}
     restart: unless-stopped
     env_file: .env
@@ -71,6 +76,7 @@ services:
       - /tmp/celerybeat-schedule
 
   web:
+    container_name: parts-vision-web
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web

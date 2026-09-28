@@ -3,12 +3,15 @@
 
 FROM python:3.11-slim-bookworm
 
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pytorch-wheels/cpu
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/data/models \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST="pypi.tuna.tsinghua.edu.cn mirrors.tuna.tsinghua.edu.cn"
 
 WORKDIR /app
 
@@ -17,12 +20,20 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt /tmp/requirements.txt
+# Torch CPU wheels come from the PyTorch index. Everything else uses the Tsinghua PyPI mirror.
+# Installing torch again from PyPI would replace the CPU build with a much larger CUDA wheel.
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir \
         --index-url "${TORCH_INDEX_URL}" \
-        --extra-index-url https://pypi.org/simple \
-        -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt
+        --trusted-host mirrors.tuna.tsinghua.edu.cn \
+        --trusted-host download.pytorch.org \
+        torch torchvision \
+    && grep -Ev '^(torch|torchvision)([=<>]|$)' /tmp/requirements.txt > /tmp/requirements.notorch.txt \
+    && pip install --no-cache-dir \
+        --index-url "${PIP_INDEX_URL}" \
+        --trusted-host pypi.tuna.tsinghua.edu.cn \
+        -r /tmp/requirements.notorch.txt \
+    && rm /tmp/requirements.txt /tmp/requirements.notorch.txt
 
 COPY backend/ /app/
 COPY deploy/ensure_models.py /app/ensure_models.py
