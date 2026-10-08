@@ -86,6 +86,8 @@ class SimilarityService:
         min_margin: float = 0.03,
         category_soft_bonus: float = 0.02,
         enable_dual_path: bool = True,
+        white_vector_repo: Any = None,
+        white_index_version: str | None = None,
     ) -> None:
         self.embedder = embedder
         self.vector_repo = vector_repo
@@ -99,6 +101,8 @@ class SimilarityService:
         self.min_margin = min_margin
         self.category_soft_bonus = category_soft_bonus
         self.enable_dual_path = enable_dual_path
+        self.white_vector_repo = white_vector_repo
+        self.white_index_version = white_index_version
 
     @property
     def ready(self) -> bool:
@@ -149,12 +153,16 @@ class SimilarityService:
 
         sku_scores: dict[str, list[tuple[float, VectorHit]]] = defaultdict(list)
         sku_category: dict[str, str | None] = {}
+        routes: list[str] = []
 
         for prep in usable:
+            repo, route = self._repo_for(prep)
+            routes.append(route)
+            warnings.append(f"search_index_{route}")
             vectors = self._embed_prepared(prep)
             weight = prep.quality.weight
             for vec in vectors:
-                hits = self.vector_repo.search(vec, top_k=self.per_image_top_k)
+                hits = repo.search(vec, top_k=self.per_image_top_k)
                 for hit in hits:
                     sku = str(hit.payload.get("sku") or "")
                     if not sku:
@@ -186,7 +194,7 @@ class SimilarityService:
         decision, confidence, rejected, reject_reason = self._decide(candidates)
         return SearchResponse(
             request_id=request_id,
-            index_version=self.index_version,
+            index_version=self._response_index_version(routes),
             embedding_model=getattr(self.embedder, "model_id", None),
             decision=decision,
             confidence_level=confidence,
@@ -197,6 +205,23 @@ class SimilarityService:
             latency_ms=(time.perf_counter() - t0) * 1000,
             prepared_images=prepared,
         )
+
+    def _repo_for(self, prep: PreparedImage):
+        """White cutouts search the white index. Full-frame fallback stays on the gallery index."""
+        white_ready = self.white_vector_repo is not None and bool(
+            getattr(self.white_vector_repo, "ready", False)
+        )
+        if prep.foreground is not None and white_ready:
+            return self.white_vector_repo, "white"
+        return self.vector_repo, "full"
+
+    def _response_index_version(self, routes: list[str]) -> str | None:
+        used = set(routes)
+        if used == {"white"}:
+            return self.white_index_version or self.index_version
+        if "white" in used and self.white_index_version and self.index_version:
+            return f"{self.white_index_version}+{self.index_version}"
+        return self.index_version
 
     def _embed_prepared(self, prep: PreparedImage) -> list[np.ndarray]:
         """Embed the white-background cutout. Use the full photo only when matting failed."""

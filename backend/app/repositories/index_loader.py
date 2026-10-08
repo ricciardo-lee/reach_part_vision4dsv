@@ -54,8 +54,7 @@ def validate_index_meta(
             f"Index vector_size={meta_dim} does not match embedder dim={vector_size}"
         )
     if require_preprocess_version is not None:
-        pp = meta.get("preprocess") or {}
-        version = pp.get("version") if isinstance(pp, dict) else meta.get("preprocess_version")
+        version = index_preprocess_version(meta)
         if version and version != require_preprocess_version:
             raise IndexCompatibilityError(
                 f"Index preprocess_version={version!r} does not match "
@@ -63,11 +62,20 @@ def validate_index_meta(
             )
 
 
+def index_preprocess_version(meta: dict) -> str | None:
+    preprocess = meta.get("preprocess") or {}
+    if isinstance(preprocess, dict) and preprocess.get("version"):
+        return str(preprocess["version"])
+    raw = meta.get("preprocess_version")
+    return str(raw) if raw else None
+
+
 def find_latest_index(
     indexes_root: Path,
     *,
     embedding_backend: str | None = None,
     embedding_model: str | None = None,
+    preprocess_version: str | None = None,
 ) -> Path | None:
     root = Path(indexes_root)
     candidates: list[Path] = []
@@ -94,6 +102,9 @@ def find_latest_index(
                 return path
             continue
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        got_preprocess = index_preprocess_version(meta)
+        if preprocess_version and got_preprocess and got_preprocess != preprocess_version:
+            continue
         if embedding_backend is not None:
             try:
                 validate_index_meta(

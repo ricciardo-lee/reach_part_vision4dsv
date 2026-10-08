@@ -16,7 +16,12 @@ from app.repositories.index_loader import (
     validate_index_meta,
 )
 from app.repositories.vector_repo import create_vector_repo
-from app.services.image_preprocessing import ImagePreprocessor, PreprocessConfig
+from app.services.image_preprocessing import (
+    PREPROCESS_VERSION,
+    WHITE_PREPROCESS_VERSION,
+    ImagePreprocessor,
+    PreprocessConfig,
+)
 from app.services.similarity import SimilarityService
 
 logger = logging.getLogger(__name__)
@@ -85,6 +90,21 @@ def get_similarity_service() -> SimilarityService | None:
             return None
 
 
+def _resolve_configured_dir(raw_value: str) -> Path:
+    raw = Path(raw_value)
+    if raw.is_absolute():
+        return raw
+    candidates = [
+        ROOT_DIR.parent / raw,
+        ROOT_DIR / raw,
+        Path.cwd() / raw,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 def _resolve_index_dir() -> Path:
     raw = Path(settings.SEARCH_INDEX_DIR)
     if not raw.is_absolute():
@@ -136,6 +156,7 @@ def _build_service() -> SimilarityService:
             index_root,
             embedding_backend=settings.EMBEDDING_BACKEND,
             embedding_model=settings.resolved_embedding_model_id,
+            preprocess_version=PREPROCESS_VERSION,
         )
         if latest is None:
             raise RuntimeError(f"No compatible memory index under {index_root}")
@@ -158,11 +179,37 @@ def _build_service() -> SimilarityService:
             meta = json.loads(latest_meta.read_text(encoding="utf-8"))
             index_version = meta.get("index_version") or index_version
 
+    white_repo = None
+    white_index_version = None
+    white_dir = (settings.SEARCH_WHITE_INDEX_DIR or "").strip()
+    if white_dir and settings.VECTOR_BACKEND.lower() != "qdrant":
+        white_path = _resolve_configured_dir(white_dir)
+        if (white_path / "vectors.npy").is_file():
+            white_repo, white_meta = load_memory_index(white_path)
+            validate_index_meta(
+                white_meta,
+                embedding_backend=settings.EMBEDDING_BACKEND,
+                embedding_model=settings.resolved_embedding_model_id,
+                vector_size=getattr(embedder, "vector_size", None),
+                require_preprocess_version=WHITE_PREPROCESS_VERSION,
+            )
+            white_index_version = (
+                white_meta.get("index_version") or white_path.name
+            )
+            logger.info("White cutout index ready: %s", white_index_version)
+        else:
+            logger.warning(
+                "SEARCH_WHITE_INDEX_DIR=%s has no vectors.npy; foreground search uses the full index",
+                white_path,
+            )
+
     service = SimilarityService(
         embedder=embedder,
         vector_repo=vector_repo,
         preprocessor=preprocessor,
         index_version=index_version,
+        white_vector_repo=white_repo,
+        white_index_version=white_index_version,
         aggregate=settings.SEARCH_AGGREGATE,  # type: ignore[arg-type]
         topm=settings.SEARCH_TOPM,
         per_image_top_k=settings.SEARCH_PER_IMAGE_TOP_K,

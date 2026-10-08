@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     QDRANT_API_KEY: str | None = None
     QDRANT_COLLECTION: str = "parts_360_current"
     SEARCH_INDEX_DIR: str = "data/indexes"
+    # Separate BiRefNet white-cutout dump. Empty keeps foreground search on the full index.
+    SEARCH_WHITE_INDEX_DIR: str = ""
     SEARCH_INDEX_VERSION: str | None = None
     SEARCH_AGGREGATE: str = "topm_mean"
     SEARCH_TOPM: int = 3

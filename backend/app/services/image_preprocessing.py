@@ -10,6 +10,7 @@ from PIL import Image, ImageOps
 
 # Bump when letterbox / EXIF / gallery protocol changes.
 PREPROCESS_VERSION = "gallery_full_letterbox_v1"
+WHITE_PREPROCESS_VERSION = "query_birefnet_white_letterbox_v1"
 
 
 @dataclass
@@ -155,6 +156,31 @@ def crop_foreground_from_mask(
     return cropped
 
 
+def build_white_foreground(
+    image: Image.Image,
+    mask: np.ndarray,
+    *,
+    target_size: int = 224,
+    margin_ratio: float = 0.05,
+    min_area: float = 0.02,
+    max_area: float = 0.92,
+) -> Image.Image | None:
+    """Same white tight crop the query embeds: mask, bbox, letterbox fill 255."""
+    oriented = ImageOps.exif_transpose(image).convert("RGB")
+    kept = orient_foreground_mask(mask)
+    cropped = crop_foreground_from_mask(
+        oriented,
+        kept,
+        margin_ratio=margin_ratio,
+        fill=255,
+        min_area=min_area,
+        max_area=max_area,
+    )
+    if cropped is None:
+        return None
+    return letterbox(cropped, size=target_size, fill=255)
+
+
 def prepare_gallery_image(image: Image.Image, config: PreprocessConfig | None = None) -> Image.Image:
     """Canonical gallery path: EXIF transpose + full letterbox (no foreground)."""
     cfg = config or PreprocessConfig()
@@ -282,16 +308,16 @@ class ImagePreprocessor:
             except Exception:  # noqa: BLE001
                 mask = None
             if mask is not None:
-                mask = orient_foreground_mask(mask)
-                cropped = crop_foreground_from_mask(
+                white = build_white_foreground(
                     oriented,
                     mask,
+                    target_size=self.target_size,
                     margin_ratio=settings.SEARCH_SEGMENT_CROP_MARGIN,
                     min_area=settings.SEARCH_SEGMENT_MIN_AREA,
                     max_area=settings.SEARCH_SEGMENT_MAX_AREA,
                 )
-                if cropped is not None:
-                    return letterbox(cropped, size=self.target_size, fill=255), "birefnet"
+                if white is not None:
+                    return white, "birefnet"
         return None, "full_only"
 
     def prepare_many(

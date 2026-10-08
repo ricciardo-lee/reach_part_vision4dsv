@@ -103,6 +103,34 @@ class BiRefNetSegmenter:
             return None
         return probability_to_mask(prob, (width, height))
 
+    def predict_masks(self, images: list[Image.Image]) -> list[np.ndarray | None]:
+        """Batch version of predict_mask. One forward pass for the whole list."""
+        results: list[np.ndarray | None] = [None] * len(images)
+        if not images or not self.ready or self._model is None:
+            return results
+        tensors: list[torch.Tensor] = []
+        sizes: list[tuple[int, int]] = []
+        valid_index: list[int] = []
+        for index, image in enumerate(images):
+            rgb = image.convert("RGB")
+            width, height = rgb.size
+            if width < 2 or height < 2:
+                continue
+            tensors.append(self._transform(rgb))
+            sizes.append((width, height))
+            valid_index.append(index)
+        if not tensors:
+            return results
+        batch = torch.stack(tensors, dim=0).to(self.device)
+        with torch.inference_mode():
+            output = self._model(batch)
+        probs = self._batch_probabilities(output)
+        if probs is None:
+            return results
+        for prob, (width, height), index in zip(probs, sizes, valid_index, strict=True):
+            results[index] = probability_to_mask(prob, (width, height))
+        return results
+
     @staticmethod
     def _last_probability(output) -> np.ndarray | None:
         value = output[-1] if isinstance(output, (list, tuple)) else output
@@ -119,3 +147,17 @@ class BiRefNetSegmenter:
         if arr.ndim != 2:
             return None
         return arr
+
+    @staticmethod
+    def _batch_probabilities(output) -> list[np.ndarray] | None:
+        value = output[-1] if isinstance(output, (list, tuple)) else output
+        if hasattr(value, "logits"):
+            value = value.logits
+        if not hasattr(value, "sigmoid"):
+            return None
+        pred = value.sigmoid().detach().float().cpu()
+        if pred.ndim == 4:
+            pred = pred[:, 0]
+        elif pred.ndim != 3:
+            return None
+        return [pred[i].numpy() for i in range(pred.shape[0])]
