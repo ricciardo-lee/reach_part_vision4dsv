@@ -17,7 +17,7 @@ docker compose up -d --build
 - 健康检查：`http://服务器/health`
 - 就绪检查：`http://服务器/ready`（应能看到 Celery worker）
 
-容器里的 `127.0.0.1` 不是宿主机。MySQL 或 MDM 在本机时，`.env` 里写 `host.docker.internal`。在别的机器上时，写那台机器的局域网地址。
+容器里的 `127.0.0.1` 不是宿主机。MySQL 在本机时，`.env` 里写 `host.docker.internal`。在别的机器上时，写那台机器的局域网地址。
 
 第一次启动 worker 时，若模型卷是空的，会用镜像里的 `huggingface_hub` 下载 `facebook/dinov2-base` 和 `ZhengPeng7/BiRefNet`。服务器需要能访问 Hugging Face。下载完成后权重留在 `models` 卷，之后重建容器不会再下。
 
@@ -72,7 +72,7 @@ docker compose up -d web
   不要把索引打进镜像，也不要重启 API。
 - **模型缓存：**权重在 `models` 卷。重建镜像或容器都会继续用这块卷。更换 `EMBEDDING_MODEL_ID` 或 `SEARCH_MATTING_MODEL_ID` 后重启 worker，启动脚本发现卷里没有对应 `config.json` 时会下载。
 - **上传图片：**在 `uploads` 卷。发版和重建容器都不要删除这个卷。过期图片仍由 beat 触发、worker 执行清理。
-- **MySQL：**表结构在 API 启动时补齐。发版后 `docker compose up -d api` 即可。不要把数据库放进 Compose。
+- **MySQL：**表结构在 API 启动时补齐。发版后 `docker compose up -d api` 即可。不要把数据库放进 Compose。产品、OE 和车型三张表也由这次启动建出空表；随后用海豚调度器的写入账号导入数据。应用账号只保留这三张表的 `SELECT` 权限。`price` 保持源数据单位，不要在导入时换算。
 
 ## 以后加显卡
 

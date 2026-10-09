@@ -81,16 +81,6 @@ export const useRecognitionStore = defineStore('recognition', {
         await new Promise((r) => setTimeout(r, 2000))
       }
     },
-    async forceVisionFallback() {
-      const res = await api.post(
-        `/api/v1/public/recognize/${this.session.public_id}/force-vision-fallback`,
-      )
-      this.session = res.data
-      this.products = []
-      if (['done', 'failed'].includes(this.session?.status)) return this.session
-      await this.pollUntilDone()
-      return this.session
-    },
     async confirmCategory(payload) {
       const res = await api.post(
         `/api/v1/public/recognize/${this.session.public_id}/confirm-category`,

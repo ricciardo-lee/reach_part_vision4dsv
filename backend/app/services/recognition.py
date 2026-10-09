@@ -621,7 +621,10 @@ async def _run_deepseek_vision(session: RecognitionSession, images: List[Uploade
 
 
 async def run_vision_recognition(session_id: int) -> None:
-    """Primary pipeline: SKU → category match (optional constrained Vision) → DeepSeek fallback."""
+    """Run image retrieval, then persist every candidate SKU and score.
+
+    Vehicle and OE constraints are applied later by the local catalog search.
+    """
     session = await RecognitionSession.get(id=session_id)
     session.status = "processing"
     await session.save()
@@ -670,20 +673,6 @@ async def run_vision_recognition(session_id: int) -> None:
             session, search, images, fallback_reason=fallback_reason
         )
 
-    await _run_deepseek_vision(session, images)
-
-
-async def run_vision_fallback_only(session_id: int) -> None:
-    """Force DeepSeek vision path (user rejected SKU / category match)."""
-    session = await RecognitionSession.get(id=session_id)
-    session.status = "processing"
-    await session.save()
-    images = await _load_part_images(session_id)
-    if not images:
-        session.status = "failed"
-        session.error_message = "没有可用于识别的零件图片"
-        await session.save()
-        return
     await _run_deepseek_vision(session, images)
 
 

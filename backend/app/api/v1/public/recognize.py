@@ -15,12 +15,10 @@ from app.core.constants import (
 )
 from app.core.exceptions import AppError
 from app.api.deps import get_device_session, get_recognition_session
-from app.integrations.mdm.client import mdm_adapter
 from app.models import (
     AuditLog,
     DeviceSession,
     OeOcrResult,
-    ProductQuerySnapshot,
     RecognitionResult,
     RecognitionSession,
     RetrievalResult,
@@ -34,7 +32,6 @@ from app.schemas import (
     ImageFocusPointsIn,
     ImageOut,
     OeConfirmIn,
-    ProductOut,
     RecognitionResultOut,
     RecognitionSessionOut,
     RetrievalCandidateOut,
@@ -42,6 +39,7 @@ from app.schemas import (
     VehicleFilterIn,
 )
 from app.services.bootstrap import image_expiry, new_public_id
+from app.services.catalog import catalog_service
 from app.services.part_guard import ensure_auto_part, session_is_auto_part
 from app.services.recognition import run_oe_ocr
 from app.utils.images import compress_to_jpeg_bytes, compute_phash, validate_image_meta
@@ -50,6 +48,11 @@ from app.utils.minio_client import get_storage
 logger = logging.getLogger("app.api.recognize")
 
 router = APIRouter(prefix="/recognize", tags=["public-recognize"])
+
+
+def _blank_to_none(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 def _progress_hint(
@@ -441,13 +444,17 @@ async def set_vehicle_filter(
     session: RecognitionSession = Depends(get_recognition_session),
 ) -> APIResponse:
     await ensure_auto_part(session)
-    session.vehicle_brand = payload.brand
-    session.vehicle_series = payload.series
-    session.vehicle_model = payload.model
-    session.vehicle_year = payload.year
-    if payload.oe_number:
-        session.oe_number = payload.oe_number.strip().upper()
+    session.vehicle_brand = _blank_to_none(payload.brand)
+    session.vehicle_series = _blank_to_none(payload.series)
+    session.vehicle_model = _blank_to_none(payload.model)
+    session.vehicle_year = _blank_to_none(payload.year)
+    oe_number = _blank_to_none(payload.oe_number)
+    if oe_number:
+        session.oe_number = oe_number.upper()
         session.oe_source = payload.oe_source or "manual"
+    else:
+        session.oe_number = None
+        session.oe_source = None
     await session.save()
     logger.info(
         "Set vehicle filter | public_id=%s | brand=%s | series=%s | model=%s | year=%s | oe=%s",
@@ -508,105 +515,10 @@ async def confirm_oe(
 @router.get("/{public_id}/products", response_model=APIResponse)
 async def search_products(session: RecognitionSession = Depends(get_recognition_session)) -> APIResponse:
     await ensure_auto_part(session)
-
-    # Prefer exact SKU snapshot from 360 gallery match.
-    retrieval = await RetrievalResult.filter(session_id=session.id).order_by("-id").first()
-    if retrieval and retrieval.accepted and retrieval.matched_sku:
-        snapshot = await ProductQuerySnapshot.filter(session_id=session.id).order_by("-id").first()
-        if snapshot and snapshot.result_payload:
-            logger.info(
-                "Return SKU match products | public_id=%s | sku=%s | count=%s",
-                session.public_id,
-                retrieval.matched_sku,
-                snapshot.result_count,
-            )
-            return APIResponse(data=snapshot.result_payload)
-
-    # Category-level multi-SKU candidates from gallery (+ optional Vision).
-    if retrieval and retrieval.decision == "category_match":
-        snapshot = await ProductQuerySnapshot.filter(session_id=session.id).order_by("-id").first()
-        if snapshot and snapshot.result_payload:
-            logger.info(
-                "Return category match products | public_id=%s | category=%s | count=%s",
-                session.public_id,
-                retrieval.selected_category_id,
-                snapshot.result_count,
-            )
-            return APIResponse(data=snapshot.result_payload)
-
-    if not session.confirmed_category_name and not session.oe_number:
-        raise AppError("请先确认品类或输入 OE 号")
-
-    latest_ocr = await OeOcrResult.filter(session_id=session.id).order_by("-id").first()
-    if session.oe_source == "ocr" and latest_ocr and not latest_ocr.confirmed_oe:
-        raise AppError("请先确认铭牌识别出的 OE 号后再查询产品")
-
-    query = {
-        "category_name": session.confirmed_category_name,
-        "category_code": session.confirmed_category_code,
-        "brand": session.vehicle_brand,
-        "series": session.vehicle_series,
-        "model": session.vehicle_model,
-        "year": session.vehicle_year,
-        "oe_number": session.oe_number,
-    }
-    logger.info("Search products | public_id=%s | query=%s", session.public_id, query)
-    products = await mdm_adapter.search_products(**query)
-    payload = [ProductOut(**p.model_dump()).model_dump() for p in products]
-    await ProductQuerySnapshot.create(
-        session_id=session.id,
-        query_payload={**query, "stage": "mdm_products", "attribute_filters": {}},
-        result_payload=payload,
-        result_count=len(payload),
-    )
+    logger.info("Search products | public_id=%s", session.public_id)
+    payload = await catalog_service.search_for_session(session)
     logger.info("Search products done | public_id=%s | count=%s", session.public_id, len(payload))
     return APIResponse(data=payload)
-
-
-@router.post("/{public_id}/force-vision-fallback", response_model=APIResponse)
-async def force_vision_fallback(session: RecognitionSession = Depends(get_recognition_session)) -> APIResponse:
-    """User rejects SKU/category match; re-run DeepSeek vision on the same part images."""
-    image_count = await UploadedImage.filter(
-        session_id=session.id,
-        purpose__in=list(PART_PURPOSES),
-        deleted_at=None,
-    ).count()
-    if image_count == 0:
-        raise AppError("请先上传零件图片")
-
-    session.status = "processing"
-    session.error_message = None
-    await session.save()
-    logger.info("Force vision fallback | public_id=%s | images=%s", session.public_id, image_count)
-
-    # Mark prior retrieval so products API falls through to MDM.
-    latest_retrieval = await RetrievalResult.filter(session_id=session.id).order_by("-id").first()
-    if latest_retrieval and (
-        latest_retrieval.accepted or latest_retrieval.decision == "category_match"
-    ):
-        latest_retrieval.accepted = False
-        latest_retrieval.decision = "vision_fallback"
-        latest_retrieval.fallback_reason = (
-            "user_rejected_sku_match"
-            if latest_retrieval.matched_sku
-            else "user_rejected_category_match"
-        )
-        await latest_retrieval.save()
-
-    from app.tasks.dispatcher import dispatch_vision_fallback_only
-
-    mode = await dispatch_vision_fallback_only(session.id, session.public_id)
-    session = await RecognitionSession.get(id=session.id)
-    logger.info(
-        "Force vision fallback dispatched | public_id=%s | mode=%s | status=%s",
-        session.public_id,
-        mode,
-        session.status,
-    )
-    return APIResponse(
-        data=await serialize_session(session),
-        message="识别完成" if session.status == "done" else "已改用原识别方式，处理中…",
-    )
 
 
 @router.post("/{public_id}/feedback", response_model=APIResponse)

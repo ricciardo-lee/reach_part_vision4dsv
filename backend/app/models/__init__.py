@@ -215,3 +215,58 @@ class AuditLog(models.Model, TimestampMixin):
     class Meta:
         # Shared databases may already have another service's audit_logs.
         table = "vision_audit_logs"
+
+
+class ProductBasicInfoUsa(models.Model):
+    """USA product catalog row. DolphinScheduler owns writes; this app only reads."""
+
+    material_code = fields.CharField(max_length=64, primary_key=True)
+    # Gallery / retrieval SKU. OE and vehicle links still use material_code.
+    short_num = fields.CharField(max_length=64, null=True, db_index=True)
+    standard_label_cn = fields.CharField(max_length=1024, null=True)
+    standard_label_en = fields.CharField(max_length=1024, null=True)
+    # Source integer preserved as-is. Callers must not rescale the unit.
+    price = fields.BigIntField(default=0)
+
+    class Meta:
+        table = "product_basic_info_usa"
+
+
+class VehicleBasicInfoUsa(models.Model):
+    """USA vehicle catalog row. DolphinScheduler owns writes; this app only reads."""
+
+    reach_car_id = fields.CharField(max_length=64, primary_key=True)
+    brand = fields.CharField(max_length=128, null=True, db_index=True)
+    manufacturer = fields.CharField(max_length=128, null=True)
+    series = fields.CharField(max_length=128, null=True)
+    model = fields.CharField(max_length=128, null=True)
+    model_year = fields.CharField(max_length=32, null=True)
+    year_from = fields.CharField(max_length=16, null=True)
+    year_till = fields.CharField(max_length=16, null=True)
+    intake_from = fields.CharField(max_length=64, null=True)
+    engine_code = fields.CharField(max_length=64, null=True)
+    trans_type = fields.CharField(max_length=64, null=True)
+    displacement = fields.CharField(max_length=64, null=True)
+    fuel_type = fields.CharField(max_length=64, null=True)
+    cylinders = fields.CharField(max_length=32, null=True)
+    displacement_cc = fields.CharField(max_length=32, null=True)
+
+    class Meta:
+        table = "vehicle_basic_info_usa"
+        indexes = (
+            ("brand", "series"),
+            ("brand", "series", "model"),
+        )
+
+
+class ProductOeVehicleUsa(models.Model):
+    """Material, OE number, and vehicle link. DolphinScheduler owns writes."""
+
+    id = fields.BigIntField(primary_key=True)
+    material_code = fields.CharField(max_length=64, db_index=True)
+    ref_num = fields.CharField(max_length=128, db_index=True)
+    reach_car_id = fields.CharField(max_length=64, db_index=True)
+
+    class Meta:
+        table = "product_oe_vehicle_usa"
+        unique_together = (("material_code", "ref_num", "reach_car_id"),)

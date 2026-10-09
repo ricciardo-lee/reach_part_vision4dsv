@@ -72,26 +72,6 @@ def run_vision_task(self, session_id: int) -> dict:
             raise
 
 
-@celery_app.task(name="recognition.run_vision_fallback", bind=True, max_retries=1, default_retry_delay=10)
-def run_vision_fallback_task(self, session_id: int) -> dict:
-    from app.services.recognition import run_vision_fallback_only
-
-    logger.info(
-        "Celery vision-fallback start | task_id=%s | session_id=%s",
-        getattr(self.request, "id", None),
-        session_id,
-    )
-    try:
-        asyncio.run(_with_db(run_vision_fallback_only(session_id)))
-        return {"session_id": session_id, "ok": True, "mode": "vision_fallback"}
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Celery vision-fallback failed | session_id=%s | error=%s", session_id, exc)
-        try:
-            raise self.retry(exc=exc, countdown=10)
-        except MaxRetriesExceededError:
-            raise
-
-
 @celery_app.task(name="images.cleanup_expired")
 def cleanup_expired_images_task() -> int:
     from datetime import datetime

@@ -75,16 +75,6 @@ class Settings(BaseSettings):
     DEEPSEEK_TIMEOUT_SECONDS: int = 60
     DEEPSEEK_MAX_RETRIES: int = 2
 
-    MDM_QUERY_BASE_URL: str = "http://127.0.0.1:8010"
-    MDM_CLIENT_ID: str = ""
-    MDM_CLIENT_SECRET: str = ""
-    MDM_QUERY_TIMEOUT_SECONDS: float = 30
-    MDM_QUERY_MAX_RETRIES: int = 2
-    MDM_TOKEN_REFRESH_SKEW_SECONDS: int = 30
-    MDM_USE_MOCK: bool = True
-    MDM_VEHICLE_TYPE: str = "passenger"
-    MDM_COUNTRY: str = ""
-
     MAX_UPLOAD_MB: int = 10
     MAX_IMAGES_PER_SESSION: int = 8
     IMAGE_RETENTION_DAYS: int = 30
@@ -100,6 +90,8 @@ class Settings(BaseSettings):
     QDRANT_URL: str = "http://127.0.0.1:6333"
     QDRANT_API_KEY: str | None = None
     QDRANT_COLLECTION: str = "parts_360_current"
+    # Local Photo360 root: category folders, then SKU folders, then r*.jpg.
+    PHOTO360_ROOT: str = ""
     SEARCH_INDEX_DIR: str = "data/indexes"
     # Separate BiRefNet white-cutout dump. Empty keeps foreground search on the full index.
     SEARCH_WHITE_INDEX_DIR: str = ""

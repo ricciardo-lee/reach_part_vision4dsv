@@ -152,6 +152,7 @@ class ProductOut(BaseModel):
     fitment: Optional[str] = None
     image_url: Optional[str] = None
     stock_status: Optional[str] = None
+    ref_nums: list[str] = Field(default_factory=list)
     price: Optional[float] = None
     match_reason: Optional[str] = None
     # Reserved for future technical-attribute narrowing (empty for now).

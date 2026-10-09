@@ -1,15 +1,14 @@
 <template>
   <div class="page">
     <section class="card">
-      <van-steps :active="3" active-color="#1f6feb">
-        <van-step>拍照上传</van-step>
+      <van-steps :active="2" active-color="#2563eb">
+        <van-step>上传找货</van-step>
         <van-step>确认品类</van-step>
-        <van-step>车型/OE</van-step>
         <van-step>查看产品</van-step>
       </van-steps>
     </section>
 
-    <QueryImageGallery :images="store.session?.images || []" />
+    <ImageCompare :images="partImages" :sku="activeProduct?.sku || ''" :preferred="preferredView" />
 
     <section class="card">
       <h2 class="title-row"><span class="emoji" aria-hidden="true">📦</span> 匹配产品</h2>
@@ -27,19 +26,26 @@
       </p>
       <p class="muted" v-else>
         品类：{{ store.session?.confirmed_category_name || '-' }}
-        · OE：{{ store.session?.oe_number || '-' }}
       </p>
+      <p class="muted">车型：{{ vehicleText }} · OE：{{ store.session?.oe_number || '未填写' }}</p>
+      <p v-if="store.products.length > 1" class="muted">点下面的产品，可切换右侧对照的 360 图。</p>
     </section>
 
     <section class="card" v-if="store.products.length">
-      <div v-for="item in store.products" :key="item.sku" class="product-item">
+      <div
+        v-for="item in store.products"
+        :key="`${item.sku}-${item.attributes?.material_code || ''}`"
+        class="product-item"
+        :class="{ active: item.sku === activeProduct?.sku }"
+        @click="activeSku = item.sku"
+      >
         <div style="display: flex; justify-content: space-between; gap: 8px">
           <strong>{{ item.name }}</strong>
           <span>💰 {{ item.price != null ? `¥${item.price}` : '-' }}</span>
         </div>
         <div class="muted">SKU：{{ item.sku }}</div>
         <div class="muted">适配：{{ item.fitment || '-' }}</div>
-        <div class="muted">库存：{{ item.stock_status || '-' }}</div>
+        <div class="muted">零件号：{{ partNumbers(item) }}</div>
         <van-tag plain type="primary">🔎 {{ item.match_reason || '匹配结果' }}</van-tag>
       </div>
     </section>
@@ -47,14 +53,6 @@
     <section class="card" v-else>
       <p class="title-row"><span class="emoji">📭</span> 暂无匹配产品</p>
       <p class="muted">可返回修改品类、车型或 OE 后再试。</p>
-    </section>
-
-    <section v-if="isSkuMatch || isCategoryMatch" class="card">
-      <p class="muted" v-if="isSkuMatch">若不是该产品，可改用原识别方式（品类确认 → 车型/OE → MDM 查询）。</p>
-      <p class="muted" v-else>若品类不对或候选不准，可改用原识别方式重新确认品类。</p>
-      <van-button type="warning" block plain :loading="fallbackLoading" @click="forceFallback">
-        ↩️ 不是这个，改用原方式查询
-      </van-button>
     </section>
 
     <section class="card">
@@ -73,15 +71,28 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { showLoadingToast, closeToast, showToast } from 'vant'
+import { showToast } from 'vant'
 import { useRecognitionStore } from '@/stores/recognition'
-import QueryImageGallery from '@/components/QueryImageGallery.vue'
+import ImageCompare from '@/components/ImageCompare.vue'
 
 const store = useRecognitionStore()
 const router = useRouter()
-const fallbackLoading = ref(false)
+const activeSku = ref('')
+
+const partImages = computed(() =>
+  (store.session?.images || []).filter((image) => image.purpose !== 'oe_label'),
+)
+const activeProduct = computed(
+  () => store.products.find((item) => item.sku === activeSku.value) || store.products[0] || null,
+)
+const preferredView = computed(() => {
+  const sku = activeProduct.value?.sku
+  const candidates = store.session?.retrieval?.candidates || []
+  const hit = candidates.find((item) => item.sku === sku)
+  return hit?.matched_views?.[0] || ''
+})
 
 const isSkuMatch = computed(() => store.session?.recognition_mode === 'sku_match')
 const isCategoryMatch = computed(() => store.session?.recognition_mode === 'category_match')
@@ -98,10 +109,24 @@ const matchScore = computed(() => {
   if (score == null) return null
   return Number(score).toFixed(3)
 })
+const vehicleText = computed(() => {
+  const parts = [
+    store.session?.vehicle_brand,
+    store.session?.vehicle_series,
+    store.session?.vehicle_model,
+    store.session?.vehicle_year,
+  ].filter(Boolean)
+  return parts.length ? parts.join(' / ') : '未选择'
+})
 
 async function feedback(correct) {
   await store.sendFeedback(correct)
   showToast(correct ? '感谢反馈 🎉' : '已记录，我们会优化')
+}
+
+function partNumbers(item) {
+  const refs = Array.isArray(item?.ref_nums) ? item.ref_nums.filter(Boolean) : []
+  return refs[0] || '-'
 }
 
 function goBack() {
@@ -112,29 +137,28 @@ function goBack() {
   router.push('/result')
 }
 
-async function forceFallback() {
-  fallbackLoading.value = true
-  showLoadingToast({ message: '改用原识别方式…', forbidClick: true, duration: 0 })
-  try {
-    await store.forceVisionFallback()
-    if (store.session?.status === 'failed') {
-      showToast(store.session.error_message || '识别失败')
-      return
-    }
-    if (store.session?.status !== 'done') {
-      showToast('识别超时，请重试')
-      return
-    }
-    router.replace('/result')
-  } catch (err) {
-    showToast(err?.message || err?.response?.data?.message || '切换失败')
-  } finally {
-    closeToast()
-    fallbackLoading.value = false
-  }
-}
-
 onMounted(() => {
   if (!store.session) router.replace('/')
 })
+
+watch(
+  () => store.products.map((item) => item.sku).join('\n'),
+  () => {
+    const skus = store.products.map((item) => item.sku)
+    if (skus.includes(activeSku.value)) return
+    const matched = store.session?.retrieval?.matched_sku
+    activeSku.value = skus.includes(matched) ? matched : skus[0] || ''
+  },
+  { immediate: true },
+)
 </script>
+
+<style scoped>
+.product-item.active {
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+  border-radius: 12px;
+  background: #eff6ff;
+}
+</style>
