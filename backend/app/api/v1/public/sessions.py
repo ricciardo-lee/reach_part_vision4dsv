@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Request
 
 from app.core.config import settings
+from app.core.exceptions import AppError
 from app.models import AuditLog, DeviceSession
 from app.schemas import APIResponse, DeviceSessionCreate, DeviceSessionOut
 from app.services.bootstrap import new_token
@@ -17,6 +18,14 @@ router = APIRouter(prefix="/sessions", tags=["public-sessions"])
 
 @router.post("/device", response_model=APIResponse)
 async def create_device_session(payload: DeviceSessionCreate, request: Request) -> APIResponse:
+    if not settings.ALLOW_ANONYMOUS_DEVICE_SESSION:
+        raise AppError(
+            "设备会话接口已停用，请使用账号登录",
+            code="gone",
+            status_code=410,
+            message_key="auth.device_disabled",
+        )
+
     token = new_token()
     expires_at = datetime.utcnow() + timedelta(hours=settings.DEVICE_SESSION_TTL_HOURS)
     session = await DeviceSession.create(

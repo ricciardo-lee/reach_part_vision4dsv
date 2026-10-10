@@ -18,6 +18,10 @@ from app.utils.minio_client import get_storage
 logger = logging.getLogger("app.main")
 
 
+def _is_production() -> bool:
+    return (settings.APP_ENV or "").strip().lower() == "production"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
@@ -44,10 +48,14 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    production = _is_production()
     app = FastAPI(
         title=settings.APP_NAME,
         version="0.1.0",
         lifespan=lifespan,
+        docs_url=None if production else "/docs",
+        redoc_url=None if production else "/redoc",
+        openapi_url=None if production else "/openapi.json",
     )
     register_request_logging(app)
     app.add_middleware(
@@ -63,12 +71,11 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> dict:
         logger.debug("health check")
-        return {
-            "status": "ok",
-            "app": settings.APP_NAME,
-            "env": settings.APP_ENV,
-            "database": settings.MYSQL_DATABASE,
-        }
+        payload = {"status": "ok", "app": settings.APP_NAME}
+        if not production:
+            payload["env"] = settings.APP_ENV
+            payload["database"] = settings.MYSQL_DATABASE
+        return payload
 
     @app.get("/ready")
     async def ready() -> dict:
@@ -83,8 +90,12 @@ def create_app() -> FastAPI:
         else:
             celery_status = "disabled"
 
+        overall = "ok" if redis_ok and celery_status in {"ok", "disabled"} else "degraded"
+        if production:
+            # Keep probes useful without exposing infra inventory publicly.
+            return {"status": overall}
+
         # Do NOT eagerly load DINOv2 here — that belongs in Celery workers.
-        # Report last-known / config-level retrieval status only.
         retrieval = retrieval_status()
         if not retrieval.get("ready") and settings.RETRIEVAL_ENABLED:
             retrieval = {
@@ -94,7 +105,6 @@ def create_app() -> FastAPI:
                 "note": "model loads lazily in Celery worker on first recognition",
             }
 
-        overall = "ok" if redis_ok and celery_status in {"ok", "disabled"} else "degraded"
         return {
             "status": overall,
             "app": settings.APP_NAME,

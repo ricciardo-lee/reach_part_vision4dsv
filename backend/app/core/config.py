@@ -81,8 +81,13 @@ class Settings(BaseSettings):
     MAX_IMAGES_PER_SESSION: int = 8
     IMAGE_RETENTION_DAYS: int = 30
     DEVICE_SESSION_TTL_HOURS: int = 72
+    # Legacy anonymous device-session endpoint. Keep false — app users use JWT login.
+    ALLOW_ANONYMOUS_DEVICE_SESSION: bool = False
     # Recognition starts per user per minute.
     RATE_LIMIT_PER_MINUTE: int = 30
+    # Login attempts per minute (public + admin).
+    LOGIN_RATE_LIMIT_PER_MINUTE_IP: int = 20
+    LOGIN_RATE_LIMIT_PER_MINUTE_USER: int = 10
     EVAL_REJECT_CONFIDENCE: float = 0.45
 
     # 360 SKU retrieval (DINOv2 + Qdrant)

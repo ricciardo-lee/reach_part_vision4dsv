@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_current_app_user
 from app.core.exceptions import UnauthorizedError
+from app.core.rate_limit import enforce_login_rate_limit
 from app.core.security import create_app_user_token, verify_password
 from app.models import AppUser, AuditLog
 from app.schemas import APIResponse, AppLoginIn, AppTokenOut
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/auth", tags=["public-auth"])
 @router.post("/login", response_model=APIResponse)
 async def login(payload: AppLoginIn, request: Request) -> APIResponse:
     username = payload.username.strip()
+    enforce_login_rate_limit(request, username)
     user = await AppUser.get_or_none(username=username, is_active=True)
     if not user or not verify_password(payload.password, user.password_hash):
         logger.warning("App user login failed | username=%s", username)
