@@ -21,6 +21,9 @@
     </div>
     <el-table :data="items" stripe style="width: 100%">
       <el-table-column prop="public_id" label="会话 ID" min-width="180" show-overflow-tooltip />
+      <el-table-column label="用户" min-width="120" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.display_name || row.username || '-' }}</template>
+      </el-table-column>
       <el-table-column prop="status" label="状态" width="90" />
       <el-table-column label="识别路径" width="110">
         <template #default="{ row }">{{ modeLabel(row.recognition_mode) }}</template>
@@ -67,6 +70,7 @@
           <h4>会话摘要</h4>
           <dl class="kv">
             <dt>路径</dt><dd>{{ modeLabel(detail.recognition_mode) }}</dd>
+            <dt>用户</dt><dd>{{ detail.session?.display_name || detail.session?.username || '-' }}</dd>
             <dt>状态</dt><dd>{{ detail.session?.status || '-' }}</dd>
             <dt>确认品类</dt><dd>{{ detail.session?.confirmed_category_name || '-' }}</dd>
             <dt>OE</dt><dd>{{ detail.session?.oe_number || '-' }}</dd>

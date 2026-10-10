@@ -171,7 +171,6 @@ async function start() {
 
 onMounted(() => {
   optimizationConsent.value = Boolean(store.session?.optimization_consent)
-  store.bootstrap()
 })
 </script>
 

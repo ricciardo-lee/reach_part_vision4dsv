@@ -6,11 +6,9 @@ from typing import Optional
 from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.exceptions import ForbiddenError, NotFoundError, RateLimitError, UnauthorizedError
-from app.core.security import decode_token, has_permission
-from app.models import AdminUser, DeviceSession, RecognitionSession
-from app.utils.redis_client import get_redis
-from app.core.config import settings
+from app.core.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
+from app.core.security import ACTOR_APP_USER, decode_token, has_permission
+from app.models import AdminUser, AppUser, DeviceSession, RecognitionSession
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -24,28 +22,41 @@ async def get_device_session(
     session = await DeviceSession.get_or_none(session_token=x_device_token, is_active=True)
     if not session or session.expires_at < datetime.utcnow():
         raise UnauthorizedError("设备会话无效或已过期")
-    try:
-        get_redis().check_rate_limit(
-            f"rate:device:{session.device_id}",
-            settings.RATE_LIMIT_PER_MINUTE,
-        )
-    except RateLimitError:
-        raise
-    except Exception:
-        # Redis 不可用时跳过限流，避免阻断主流程（fail-open）
-        pass
     request.state.device_session = session
     return session
 
 
+async def get_current_app_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+) -> AppUser:
+    if not credentials:
+        raise UnauthorizedError("请先登录")
+    try:
+        payload = decode_token(credentials.credentials)
+    except ValueError as exc:
+        raise UnauthorizedError("Token 无效") from exc
+    if payload.get("type") != "access" or payload.get("actor") != ACTOR_APP_USER:
+        raise UnauthorizedError("Token 类型错误")
+    try:
+        user_id = int(payload["sub"])
+    except (TypeError, ValueError) as exc:
+        raise UnauthorizedError("Token 无效") from exc
+    user = await AppUser.get_or_none(id=user_id, is_active=True)
+    if not user:
+        raise UnauthorizedError("用户不存在或已禁用")
+    request.state.app_user = user
+    return user
+
+
 async def get_recognition_session(
     public_id: str,
-    device_session: DeviceSession = Depends(get_device_session),
+    app_user: AppUser = Depends(get_current_app_user),
 ) -> RecognitionSession:
     session = await RecognitionSession.get_or_none(public_id=public_id)
     if not session:
         raise NotFoundError("识别会话不存在")
-    if session.device_session_id and session.device_session_id != device_session.id:
+    if session.app_user_id != app_user.id:
         raise ForbiddenError("无权访问该识别会话")
     return session
 
@@ -59,7 +70,7 @@ async def get_current_admin(
         payload = decode_token(credentials.credentials)
     except ValueError as exc:
         raise UnauthorizedError("Token 无效") from exc
-    if payload.get("type") != "access":
+    if payload.get("type") != "access" or payload.get("actor") == ACTOR_APP_USER:
         raise UnauthorizedError("Token 类型错误")
     user = await AdminUser.get_or_none(id=int(payload["sub"]), is_active=True)
     if not user:

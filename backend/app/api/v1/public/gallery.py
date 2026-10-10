@@ -7,9 +7,9 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 
-from app.api.deps import get_device_session
+from app.api.deps import get_current_app_user
 from app.core.exceptions import NotFoundError
-from app.models import DeviceSession
+from app.models import AppUser
 from app.schemas import APIResponse
 from app.services.gallery import list_views, resolve_image
 
@@ -24,7 +24,7 @@ _MEDIA_TYPES = {
 
 
 @router.get("/{sku}/views", response_model=APIResponse)
-async def gallery_views(sku: str, _: DeviceSession = Depends(get_device_session)) -> APIResponse:
+async def gallery_views(sku: str, _: AppUser = Depends(get_current_app_user)) -> APIResponse:
     images = []
     for name in list_views(sku):
         images.append(
@@ -37,7 +37,7 @@ async def gallery_views(sku: str, _: DeviceSession = Depends(get_device_session)
 
 
 @router.get("/{sku}/files/{name}")
-async def gallery_file(sku: str, name: str, _: DeviceSession = Depends(get_device_session)) -> FileResponse:
+async def gallery_file(sku: str, name: str, _: AppUser = Depends(get_current_app_user)) -> FileResponse:
     path = resolve_image(sku, name)
     if path is None:
         raise NotFoundError("360 图片不存在")

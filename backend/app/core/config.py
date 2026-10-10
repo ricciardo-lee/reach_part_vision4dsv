@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     MAX_IMAGES_PER_SESSION: int = 8
     IMAGE_RETENTION_DAYS: int = 30
     DEVICE_SESSION_TTL_HOURS: int = 72
+    # Recognition starts per user per minute.
     RATE_LIMIT_PER_MINUTE: int = 30
     EVAL_REJECT_CONFIDENCE: float = 0.45
 

@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Sequence, Set
@@ -35,7 +35,6 @@ from realphoto_eval_lib import (  # noqa: E402
 )
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
-DEFAULT_DEVICE_ID = "realphoto-eval-batch"
 RESULT_SHEET = "识别结果"
 SAMPLE_SHEET = "抽样清单"
 INFO_SHEET = "运行信息"
@@ -100,12 +99,10 @@ class RecognizeClient:
         timeout: float = 120.0,
         poll_interval: float = 3.0,
         poll_timeout: float = 180.0,
-        device_id: str = DEFAULT_DEVICE_ID,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.poll_interval = poll_interval
         self.poll_timeout = poll_timeout
-        self.device_id = device_id
         self._token: Optional[str] = None
         self._client = httpx.Client(base_url=self.base_url, timeout=timeout)
 
@@ -121,7 +118,7 @@ class RecognizeClient:
     def _headers(self) -> Dict[str, str]:
         if not self._token:
             return {}
-        return {"X-Device-Token": self._token}
+        return {"Authorization": f"Bearer {self._token}"}
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         delay = 2.0
@@ -178,14 +175,15 @@ class RecognizeClient:
                 file=sys.stderr,
             )
 
-    def create_device_session(self, device_id: Optional[str] = None) -> str:
-        chosen = (device_id or self.device_id)[:128]
-        if len(chosen) < 8:
-            chosen = f"{chosen}-eval000"
-        data = self._request("POST", "/api/v1/public/sessions/device", json={"device_id": chosen})
-        token = data.get("session_token") if isinstance(data, dict) else None
+    def login(self, username: str, password: str) -> str:
+        data = self._request(
+            "POST",
+            "/api/v1/public/auth/login",
+            json={"username": username, "password": password},
+        )
+        token = data.get("access_token") if isinstance(data, dict) else None
         if not token:
-            raise EvalApiError("创建设备会话失败：缺少 session_token")
+            raise EvalApiError("登录失败：缺少 access_token")
         self._token = token
         return token
 
@@ -241,10 +239,6 @@ class RecognizeClient:
         raise EvalApiError(f"识别超时（{self.poll_timeout:.0f}s），最后状态={last.get('status')}")
 
     def recognize(self, upload: UploadSet, *, focus_mode: str = "none") -> Dict[str, Any]:
-        # One independent device session per part so eval does not share the
-        # public API's per-device 30 req/min bucket.
-        session_id = f"{self.device_id}-{uuid.uuid4().hex[:16]}"[:128]
-        self.create_device_session(session_id)
         public_id = self.create_recognition_session()
         paths = [photo.path for photo in upload.all_photos]
         session = self.upload_images(public_id, paths, purpose="part", sort_order=0)
@@ -473,7 +467,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=None, help="输出 Excel 路径")
     parser.add_argument("--poll-interval", type=float, default=3.0, help="轮询间隔秒")
     parser.add_argument("--poll-timeout", type=float, default=180.0, help="单次识别超时秒")
-    parser.add_argument("--device-id", default=DEFAULT_DEVICE_ID, help="设备 ID 前缀；每个物料会再拼独立后缀")
+    parser.add_argument(
+        "--username",
+        default=os.environ.get("APP_USERNAME", ""),
+        help="识别用户名，也可用环境变量 APP_USERNAME",
+    )
+    parser.add_argument(
+        "--password",
+        default=os.environ.get("APP_PASSWORD", ""),
+        help="识别用户密码，也可用环境变量 APP_PASSWORD",
+    )
     parser.add_argument(
         "--focus-mode",
         choices=["none", "center"],
@@ -548,14 +551,21 @@ def run(args: argparse.Namespace) -> int:
         print("没有待测物料（可能已全部完成）")
         return 0
 
+    if not args.username or not args.password:
+        print(
+            "需要识别用户：--username/--password 或环境变量 APP_USERNAME/APP_PASSWORD",
+            file=sys.stderr,
+        )
+        return 1
+
     failures = 0
     with RecognizeClient(
         args.base_url,
         poll_interval=args.poll_interval,
         poll_timeout=args.poll_timeout,
-        device_id=args.device_id,
     ) as client:
         client.ensure_healthy()
+        client.login(args.username, args.password)
         for index, group in enumerate(pending, start=1):
             upload = uploads[group.material_code]
             print(

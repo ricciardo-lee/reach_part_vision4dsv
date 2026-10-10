@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import api, { ensureDeviceSession, resetDeviceSession } from '@/api/client'
+import api from '@/api/client'
 
 export const useRecognitionStore = defineStore('recognition', {
   state: () => ({
@@ -11,25 +11,18 @@ export const useRecognitionStore = defineStore('recognition', {
     loading: false,
   }),
   actions: {
-    async bootstrap() {
-      try {
-        await ensureDeviceSession()
-      } catch (err) {
-        await resetDeviceSession()
-      }
+    reset() {
+      this.session = null
+      this.products = []
+      this.oeCandidates = []
+      this.oeOcrMeta = null
+      this.oeConfirmed = false
     },
     async createSession() {
       this.loading = true
       try {
-        await this.bootstrap()
-        try {
-          const res = await api.post('/api/v1/public/recognize')
-          this.session = res.data
-        } catch (err) {
-          await resetDeviceSession()
-          const res = await api.post('/api/v1/public/recognize')
-          this.session = res.data
-        }
+        const res = await api.post('/api/v1/public/recognize')
+        this.session = res.data
         this.products = []
         this.oeCandidates = []
         this.oeOcrMeta = null

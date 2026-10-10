@@ -201,6 +201,50 @@ async def ensure_schema_patches() -> None:
             "updated_at",
         ],
     )
+    _, app_user_tables = await conn.execute_query(
+        "SELECT COUNT(*) AS c FROM information_schema.TABLES "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vision_app_users'"
+    )
+    app_user_table = app_user_tables[0] if app_user_tables else {}
+    app_user_table_count = (
+        app_user_table.get("c", 0)
+        if isinstance(app_user_table, dict)
+        else (app_user_table[0] if app_user_table else 0)
+    )
+    if not app_user_table_count:
+        await conn.execute_script(
+            """
+            CREATE TABLE IF NOT EXISTS vision_app_users (
+              id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+              username VARCHAR(64) NOT NULL,
+              password_hash VARCHAR(255) NOT NULL,
+              display_name VARCHAR(128) NOT NULL DEFAULT '',
+              is_active TINYINT(1) NOT NULL DEFAULT 1,
+              last_login_at DATETIME(6) NULL,
+              created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+              updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+              UNIQUE KEY uid_vision_app_users_username (username)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
+
+    _, app_user_cols = await conn.execute_query(
+        "SELECT COUNT(*) AS c FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recognition_sessions' "
+        "AND COLUMN_NAME = 'app_user_id'"
+    )
+    app_user_col = app_user_cols[0] if app_user_cols else {}
+    app_user_col_count = (
+        app_user_col.get("c", 0) if isinstance(app_user_col, dict) else (app_user_col[0] if app_user_col else 0)
+    )
+    if not app_user_col_count:
+        await conn.execute_script(
+            "ALTER TABLE recognition_sessions ADD COLUMN app_user_id INT NULL, "
+            "ADD KEY idx_recognition_sessions_app_user_id (app_user_id), "
+            "ADD CONSTRAINT fk_recognition_sessions_app_user "
+            "FOREIGN KEY (app_user_id) REFERENCES vision_app_users (id)"
+        )
+
     await _copy_integer_pk_rows(
         conn,
         legacy="audit_logs",

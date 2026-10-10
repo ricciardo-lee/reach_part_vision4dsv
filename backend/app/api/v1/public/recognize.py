@@ -13,17 +13,18 @@ from app.core.constants import (
     PART_IMAGE_PURPOSE,
     PART_PURPOSES,
 )
-from app.core.exceptions import AppError
-from app.api.deps import get_device_session, get_recognition_session
+from app.core.exceptions import AppError, RateLimitError
+from app.api.deps import get_current_app_user, get_recognition_session
 from app.models import (
+    AppUser,
     AuditLog,
-    DeviceSession,
     OeOcrResult,
     RecognitionResult,
     RecognitionSession,
     RetrievalResult,
     UploadedImage,
 )
+from app.utils.redis_client import get_redis
 from app.schemas import (
     APIResponse,
     ConfirmCategoryIn,
@@ -204,16 +205,16 @@ async def serialize_session(session: RecognitionSession) -> RecognitionSessionOu
 
 
 @router.post("", response_model=APIResponse)
-async def create_session(device_session: DeviceSession = Depends(get_device_session)) -> APIResponse:
+async def create_session(app_user: AppUser = Depends(get_current_app_user)) -> APIResponse:
     session = await RecognitionSession.create(
         public_id=new_public_id(),
-        device_session_id=device_session.id,
+        app_user_id=app_user.id,
         status="created",
     )
     logger.info(
-        "Created recognition session | public_id=%s | device_session_id=%s",
+        "Created recognition session | public_id=%s | app_user_id=%s",
         session.public_id,
-        device_session.id,
+        app_user.id,
     )
     return APIResponse(data=await serialize_session(session))
 
@@ -335,8 +336,23 @@ async def save_image_focus_points(
     return APIResponse(data=await serialize_session(session), message="已保存焦点")
 
 
+def _enforce_user_recognition_limit(user_id: int) -> None:
+    """Count recognition starts per user. Redis outages fail open."""
+    try:
+        get_redis().check_rate_limit(
+            f"rate:recognize:user:{user_id}",
+            settings.RATE_LIMIT_PER_MINUTE,
+        )
+    except RateLimitError:
+        raise RateLimitError("识别过于频繁，请稍后再试")
+    except Exception:
+        logger.warning("Recognition rate limit skipped | user_id=%s", user_id)
+
+
 @router.post("/{public_id}/start", response_model=APIResponse)
 async def start_recognition(session: RecognitionSession = Depends(get_recognition_session)) -> APIResponse:
+    if session.app_user_id:
+        _enforce_user_recognition_limit(session.app_user_id)
     image_count = await UploadedImage.filter(
         session_id=session.id,
         purpose__in=list(PART_PURPOSES),

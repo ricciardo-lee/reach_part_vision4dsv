@@ -5,16 +5,16 @@ from pathlib import Path
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse, Response
 
-from app.api.deps import get_device_session
+from app.api.deps import get_current_app_user
 from app.core.exceptions import NotFoundError
-from app.models import DeviceSession
+from app.models import AppUser
 from app.utils.minio_client import LocalStorage, get_storage
 
 router = APIRouter(prefix="/files", tags=["public-files"])
 
 
 @router.get("/{object_key:path}")
-async def get_file(object_key: str, _: DeviceSession = Depends(get_device_session)) -> Response:
+async def get_file(object_key: str, _: AppUser = Depends(get_current_app_user)) -> Response:
     storage = get_storage()
     try:
         data = storage.get_bytes(object_key)

@@ -8,6 +8,7 @@
         <el-menu-item index="/mappings">🧩 品类映射</el-menu-item>
         <el-menu-item index="/prompts">✍️ Prompt</el-menu-item>
         <el-menu-item index="/users">👥 管理员</el-menu-item>
+        <el-menu-item index="/app-users">🧑 识别用户</el-menu-item>
         <el-menu-item index="/audit">🕵️ 审计日志</el-menu-item>
       </el-menu>
       <div style="margin: 16px 12px; color: #9ca3af; font-size: 12px">

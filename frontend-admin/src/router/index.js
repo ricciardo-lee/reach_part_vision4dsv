@@ -7,6 +7,7 @@ import MappingsView from '@/views/MappingsView.vue'
 import PromptsView from '@/views/PromptsView.vue'
 import AuditView from '@/views/AuditView.vue'
 import UsersView from '@/views/UsersView.vue'
+import AppUsersView from '@/views/AppUsersView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -22,6 +23,7 @@ const router = createRouter({
         { path: 'prompts', name: 'prompts', component: PromptsView },
         { path: 'audit', name: 'audit', component: AuditView },
         { path: 'users', name: 'users', component: UsersView },
+        { path: 'app-users', name: 'app-users', component: AppUsersView },
       ],
     },
   ],

@@ -181,6 +181,41 @@ class AdminUserOut(APIModel):
     last_login_at: Optional[datetime] = None
 
 
+class AppLoginIn(BaseModel):
+    username: str
+    password: str
+
+
+class AppTokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    username: str
+    display_name: str
+
+
+class AppUserCreateIn(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=6, max_length=128)
+    display_name: str = Field(default="", max_length=128)
+
+
+class AppUserUpdateIn(BaseModel):
+    display_name: Optional[str] = Field(default=None, max_length=128)
+    is_active: Optional[bool] = None
+
+
+class AppUserPasswordIn(BaseModel):
+    password: str = Field(min_length=6, max_length=128)
+
+
+class AppUserOut(APIModel):
+    id: int
+    username: str
+    display_name: str
+    is_active: bool
+    last_login_at: Optional[datetime] = None
+
+
 class CategoryMappingIn(BaseModel):
     alias_name: str
     category_code: str

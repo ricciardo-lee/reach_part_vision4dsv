@@ -49,6 +49,19 @@ def create_refresh_token(subject: str, extra: Optional[dict] = None) -> str:
     )
 
 
+ACTOR_APP_USER = "app_user"
+
+
+def create_app_user_token(subject: str) -> str:
+    """Recognition-page token. Longer than admin access tokens; matches device session TTL."""
+    return create_token(
+        subject,
+        "access",
+        timedelta(hours=settings.DEVICE_SESSION_TTL_HOURS),
+        {"actor": ACTOR_APP_USER},
+    )
+
+
 def decode_token(token: str) -> dict[str, Any]:
     try:
         return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])

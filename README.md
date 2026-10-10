@@ -152,7 +152,8 @@ API 首次启动会建出空表。海豚不要再用全 `LONGTEXT`、无主键�
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/v1/public/sessions/device` | 创建设备匿名会话 |
+| POST | `/api/v1/public/auth/login` | 识别用户登录，返回 72 小时 access token |
+| GET  | `/api/v1/public/auth/me` | 当前识别用户 |
 | POST | `/api/v1/public/recognize` | 创建识别会话 |
 | POST | `/api/v1/public/recognize/{id}/images` | 上传零件图（同一产品最多 8 张，`purpose=part`）或铭牌图 |
 | POST | `/api/v1/public/recognize/{id}/start` | 启动识别（优先 360 图库 SKU 匹配，未命中再 DeepSeek） |
@@ -164,7 +165,7 @@ API 首次启动会建出空表。海豚不要再用全 `LONGTEXT`、无主键�
 | POST | `/api/v1/public/recognize/{id}/oe-confirm` | 确认 OE |
 | GET  | `/api/v1/public/recognize/{id}/products` | 用本地目录、图库候选和车型/OE 查询产品 |
 | GET  | `/api/v1/public/gallery/{sku}/views` | 列出该 SKU 文件夹里的全部 360 图，按文件名排序 |
-| GET  | `/api/v1/public/gallery/{sku}/files/{name}` | 读取单张 360 图，需设备会话 |
+| GET  | `/api/v1/public/gallery/{sku}/files/{name}` | 读取单张 360 图，需识别用户登录 |
 | POST | `/api/v1/admin/auth/login` | 管理端登录 |
 | GET  | `/api/v1/admin/stats` | 含 Top-1 / Top-3 / 拒识率 |
 
@@ -203,7 +204,7 @@ PYTHONPATH=. python ../scripts/import_qdrant_index.py \
 - 原图默认保留 **30 天**后由 Celery Beat 清理（物理删除）
 - 用于模型优化必须用户显式勾选同意；撤回后不再进入评测导出
 - 对象存储使用私有 Bucket + 签名 URL
-- 设备级限流依赖 Redis；Redis 不可用时限流 fail-open（仅告警）
+- 识别启动按用户限流（默认每分钟 30 次，`RATE_LIMIT_PER_MINUTE`），依赖 Redis；Redis 不可用时限流 fail-open（仅告警）
 
 ## 评测错误样本导出
 

@@ -26,6 +26,20 @@ class AdminUser(models.Model, TimestampMixin):
         table = "vision_admin_users"
 
 
+class AppUser(models.Model, TimestampMixin):
+    """Account that signs in on the parts recognition page. Admins manage these."""
+
+    id = fields.IntField(primary_key=True)
+    username = fields.CharField(max_length=64, unique=True)
+    password_hash = fields.CharField(max_length=255)
+    display_name = fields.CharField(max_length=128, default="")
+    is_active = fields.BooleanField(default=True)
+    last_login_at = fields.DatetimeField(null=True)
+
+    class Meta:
+        table = "vision_app_users"
+
+
 class DeviceSession(models.Model, TimestampMixin):
     id = fields.IntField(primary_key=True)
     session_token = fields.CharField(max_length=128, unique=True, db_index=True)
@@ -44,6 +58,9 @@ class RecognitionSession(models.Model, TimestampMixin):
     public_id = fields.CharField(max_length=36, unique=True, db_index=True)
     device_session: fields.ForeignKeyRelation[DeviceSession] = fields.ForeignKeyField(
         "models.DeviceSession", related_name="recognition_sessions", null=True
+    )
+    app_user: fields.ForeignKeyRelation[AppUser] = fields.ForeignKeyField(
+        "models.AppUser", related_name="recognition_sessions", null=True
     )
     status = fields.CharField(max_length=32, default="created")
     task_id = fields.CharField(max_length=64, null=True)

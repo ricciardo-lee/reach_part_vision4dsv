@@ -157,7 +157,6 @@ async function confirmOe() {
 }
 
 async function ensureSession() {
-  await store.bootstrap()
   if (!store.session?.public_id) await store.createSession()
 }
 
@@ -181,7 +180,6 @@ async function runOeOcr() {
 }
 
 async function loadBrands() {
-  await store.bootstrap()
   const res = await api.get('/api/v1/public/vehicle/brands/indexed')
   brandIndexed.value = res.data || emptyIndexed()
 }

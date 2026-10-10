@@ -9,6 +9,7 @@ from app.api.deps import require_permission
 from app.core.constants import CATEGORY_CN
 from app.models import (
     AdminUser,
+    AppUser,
     AuditLog,
     CategoryMapping,
     ProductQuerySnapshot,
@@ -19,6 +20,10 @@ from app.models import (
 )
 from app.schemas import (
     APIResponse,
+    AppUserCreateIn,
+    AppUserOut,
+    AppUserPasswordIn,
+    AppUserUpdateIn,
     AuditLogOut,
     CategoryMappingIn,
     CategoryMappingOut,
@@ -27,7 +32,8 @@ from app.schemas import (
     StatsOut,
 )
 from app.core.config import settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import AppError, NotFoundError
+from app.core.security import hash_password
 from app.services.eval_metrics import compute_eval_stats
 from app.tasks.dispatcher import dispatch_vision_recognition
 
@@ -174,6 +180,7 @@ async def list_sessions(
         total = await query.count()
         items = await query.offset((page - 1) * page_size).limit(page_size)
 
+    user_labels = await _app_user_labels({item.app_user_id for item in items if item.app_user_id})
     data = []
     for item in items:
         latest = await RecognitionResult.filter(session_id=item.id).order_by("-id").first()
@@ -192,9 +199,12 @@ async def list_sessions(
         else:
             part_name = latest.part_name if latest else None
             confidence = latest.confidence if latest else None
+        owner = user_labels.get(item.app_user_id) or {}
         data.append(
             {
                 "public_id": item.public_id,
+                "username": owner.get("username"),
+                "display_name": owner.get("display_name"),
                 "status": item.status,
                 "task_id": item.task_id,
                 "confirmed_category_name": item.confirmed_category_name,
@@ -232,11 +242,16 @@ async def session_detail(
     latest_retrieval = retrievals[0] if retrievals else None
     mode = _recognition_mode(latest_retrieval, latest_vision)
     snapshot = await ProductQuerySnapshot.filter(session_id=session.id).order_by("-id").first()
+    owner = (await _app_user_labels({session.app_user_id} if session.app_user_id else set())).get(
+        session.app_user_id
+    ) or {}
     return APIResponse(
         data={
             "recognition_mode": mode,
             "session": {
                 "public_id": session.public_id,
+                "username": owner.get("username"),
+                "display_name": owner.get("display_name"),
                 "status": session.status,
                 "confirmed_category_code": session.confirmed_category_code,
                 "confirmed_category_name": session.confirmed_category_name,
@@ -441,3 +456,103 @@ async def list_users(admin: AdminUser = Depends(require_permission("user:read"))
             for u in users
         ]
     )
+
+
+def _app_user_out(user: AppUser) -> dict:
+    return AppUserOut.model_validate(user).model_dump()
+
+
+async def _app_user_labels(user_ids: set[int]) -> dict[int, dict[str, str]]:
+    if not user_ids:
+        return {}
+    users = await AppUser.filter(id__in=list(user_ids))
+    return {user.id: {"username": user.username, "display_name": user.display_name} for user in users}
+
+
+def _clean_username(username: str) -> str:
+    value = username.strip()
+    if not value or len(value) > 64:
+        raise AppError("用户名长度需为 1–64 个字符")
+    return value
+
+
+@router.get("/app-users", response_model=APIResponse)
+async def list_app_users(admin: AdminUser = Depends(require_permission("user:read"))) -> APIResponse:
+    users = await AppUser.all().order_by("id")
+    return APIResponse(data=[_app_user_out(user) for user in users])
+
+
+@router.post("/app-users", response_model=APIResponse)
+async def create_app_user(
+    payload: AppUserCreateIn,
+    admin: AdminUser = Depends(require_permission("user:write")),
+) -> APIResponse:
+    username = _clean_username(payload.username)
+    if await AppUser.get_or_none(username=username):
+        raise AppError("用户名已存在")
+    user = await AppUser.create(
+        username=username,
+        password_hash=hash_password(payload.password),
+        display_name=(payload.display_name or "").strip(),
+        is_active=True,
+    )
+    await AuditLog.create(
+        actor_type="admin",
+        actor_id=str(admin.id),
+        action="app_user.create",
+        resource_type="app_user",
+        resource_id=str(user.id),
+        detail={"username": user.username},
+    )
+    return APIResponse(data=_app_user_out(user))
+
+
+@router.patch("/app-users/{user_id}", response_model=APIResponse)
+async def update_app_user(
+    user_id: int,
+    payload: AppUserUpdateIn,
+    admin: AdminUser = Depends(require_permission("user:write")),
+) -> APIResponse:
+    user = await AppUser.get_or_none(id=user_id)
+    if not user:
+        raise NotFoundError("识别用户不存在")
+    changes: dict = {}
+    if payload.display_name is not None:
+        user.display_name = payload.display_name.strip()
+        changes["display_name"] = user.display_name
+    if payload.is_active is not None:
+        user.is_active = payload.is_active
+        changes["is_active"] = user.is_active
+    if changes:
+        await user.save()
+        await AuditLog.create(
+            actor_type="admin",
+            actor_id=str(admin.id),
+            action="app_user.update",
+            resource_type="app_user",
+            resource_id=str(user.id),
+            detail=changes,
+        )
+    return APIResponse(data=_app_user_out(user))
+
+
+@router.post("/app-users/{user_id}/password", response_model=APIResponse)
+async def reset_app_user_password(
+    user_id: int,
+    payload: AppUserPasswordIn,
+    admin: AdminUser = Depends(require_permission("user:write")),
+) -> APIResponse:
+    user = await AppUser.get_or_none(id=user_id)
+    if not user:
+        raise NotFoundError("识别用户不存在")
+    user.password_hash = hash_password(payload.password)
+    await user.save()
+    await AuditLog.create(
+        actor_type="admin",
+        actor_id=str(admin.id),
+        action="app_user.reset_password",
+        resource_type="app_user",
+        resource_id=str(user.id),
+        detail={"username": user.username},
+    )
+    return APIResponse(data=_app_user_out(user))

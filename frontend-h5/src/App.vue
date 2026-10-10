@@ -3,10 +3,42 @@
     <header class="topbar">
       <span class="brand">REACH</span>
       <span class="product">Part Finder</span>
+      <span class="spacer" />
+      <template v-if="showUser">
+        <span class="user">{{ displayName }}</span>
+        <button type="button" class="logout" @click="logout">退出</button>
+      </template>
     </header>
     <router-view />
   </div>
 </template>
+
+<script setup>
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { clearAppAuth } from '@/api/client'
+import { useRecognitionStore } from '@/stores/recognition'
+
+const route = useRoute()
+const router = useRouter()
+const store = useRecognitionStore()
+const displayName = ref(localStorage.getItem('app_name') || '')
+const showUser = computed(() => route.path !== '/login' && Boolean(displayName.value))
+
+watch(
+  () => route.path,
+  () => {
+    displayName.value = localStorage.getItem('app_name') || ''
+  },
+)
+
+function logout() {
+  clearAppAuth()
+  store.reset()
+  displayName.value = ''
+  router.push('/login')
+}
+</script>
 
 <style scoped>
 .app-shell {
@@ -36,5 +68,26 @@
 .product {
   font-size: 14px;
   opacity: 0.86;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.user {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+.logout {
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 13px;
+  padding: 6px 0 6px 8px;
 }
 </style>
