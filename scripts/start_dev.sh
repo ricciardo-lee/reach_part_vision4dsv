@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Start local stack: Redis + API + Celery worker + Celery beat (+ optional H5/Web/Admin)
+# Start local stack: Redis + API + Celery worker/beat + H5 + Web + Admin
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/scripts/common.sh"
 
-WITH_H5=1
-WITH_ADMIN=0
-WITH_WEB=0
+WITH_FRONTENDS=1
 API_PORT=8000
 H5_PORT=5173
 ADMIN_PORT=5174
@@ -18,21 +16,17 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/start_dev.sh [options]
 
+Starts Redis, API, Celery worker/beat, H5 (5173), Web (5175), and Admin (5174).
+
 Options:
   --api-only       Only Redis + API + Celery worker/beat
-  --with-admin     Also start admin frontend (5174)
-  --with-web       Also start desktop web frontend (5175)
-  --no-h5          Do not start H5 frontend
   -h, --help       Show help
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --api-only) WITH_H5=0; WITH_ADMIN=0; WITH_WEB=0; shift ;;
-    --with-admin) WITH_ADMIN=1; shift ;;
-    --with-web) WITH_WEB=1; shift ;;
-    --no-h5) WITH_H5=0; shift ;;
+    --api-only) WITH_FRONTENDS=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -87,35 +81,23 @@ else
   echo "WARN /ready endpoint not reachable yet" >&2
 fi
 
-# H5 / Web / Admin need frontend cwd
-if [[ "$WITH_H5" -eq 1 ]]; then
-  if is_port_listening "$H5_PORT"; then
-    echo "OK  H5 port $H5_PORT already in use"
-  elif [[ -d "$ROOT/frontend-h5/node_modules" ]]; then
-    start_bg h5 bash -lc "cd \"$ROOT/frontend-h5\" && npm run dev -- --host 0.0.0.0 --port $H5_PORT"
+start_frontend() {
+  local name="$1"
+  local port="$2"
+  local dir="$3"
+  if is_port_listening "$port"; then
+    echo "OK  $name port $port already in use"
+  elif [[ -d "$dir/node_modules" ]]; then
+    start_bg "$name" bash -lc "cd \"$dir\" && npm run dev -- --host 0.0.0.0 --port $port"
   else
-    echo "WARN frontend-h5/node_modules missing, skip H5 (run: cd frontend-h5 && npm install)"
+    echo "WARN $dir/node_modules missing, skip $name (run: cd $dir && npm install)"
   fi
-fi
+}
 
-if [[ "$WITH_ADMIN" -eq 1 ]]; then
-  if is_port_listening "$ADMIN_PORT"; then
-    echo "OK  Admin port $ADMIN_PORT already in use"
-  elif [[ -d "$ROOT/frontend-admin/node_modules" ]]; then
-    start_bg admin bash -lc "cd \"$ROOT/frontend-admin\" && npm run dev -- --host 0.0.0.0 --port $ADMIN_PORT"
-  else
-    echo "WARN frontend-admin/node_modules missing, skip Admin (run: cd frontend-admin && npm install)"
-  fi
-fi
-
-if [[ "$WITH_WEB" -eq 1 ]]; then
-  if is_port_listening "$WEB_PORT"; then
-    echo "OK  Web port $WEB_PORT already in use"
-  elif [[ -d "$ROOT/frontend-web/node_modules" ]]; then
-    start_bg web bash -lc "cd \"$ROOT/frontend-web\" && npm run dev -- --host 0.0.0.0 --port $WEB_PORT"
-  else
-    echo "WARN frontend-web/node_modules missing, skip Web (run: cd frontend-web && npm install)"
-  fi
+if [[ "$WITH_FRONTENDS" -eq 1 ]]; then
+  start_frontend h5 "$H5_PORT" "$ROOT/frontend-h5"
+  start_frontend web "$WEB_PORT" "$ROOT/frontend-web"
+  start_frontend admin "$ADMIN_PORT" "$ROOT/frontend-admin"
 fi
 
 cat <<EOF
@@ -125,8 +107,8 @@ API:     http://127.0.0.1:${API_PORT}/health
 Ready:   http://127.0.0.1:${API_PORT}/ready
 Docs:    http://127.0.0.1:${API_PORT}/docs
 H5:      http://127.0.0.1:${H5_PORT}/
-Web:     http://127.0.0.1:${WEB_PORT}/   (if --with-web)
-Admin:   http://127.0.0.1:${ADMIN_PORT}/   (if --with-admin)
+Web:     http://127.0.0.1:${WEB_PORT}/
+Admin:   http://127.0.0.1:${ADMIN_PORT}/
 Celery:  worker + beat started (see logs)
 
 Logs:    $LOG_DIR/

@@ -56,21 +56,17 @@ python -m app.scripts.init_minio
 
 ### 4. 一键启动（推荐）
 
-自动检查/启动本地 Redis，并后台拉起 API + Celery worker + H5。桌面 Web 和管理后台按参数可选启动。
+自动检查/启动本地 Redis，并后台拉起 API、Celery worker/beat、手机 H5、桌面 Web 和管理后台。
 
 ```bash
 ./scripts/start_dev.sh
 # 仅后端：
 ./scripts/start_dev.sh --api-only
-# 含桌面 Web：
-./scripts/start_dev.sh --with-web
-# 含管理后台：
-./scripts/start_dev.sh --with-admin
 # 停止：
 ./scripts/stop_dev.sh
 ```
 
-日志目录：`backend/logs/`（`api.log` / `celery.log` / `h5.log`，开启对应前端时还有 `web.log` / `admin.log`）
+日志目录：`backend/logs/`（`api.log` / `celery.log` / `beat.log` / `h5.log` / `web.log` / `admin.log`）
 
 也可分开启动：
 
@@ -104,7 +100,7 @@ npm run dev
 
 访问：<http://127.0.0.1:5175>
 
-也可以执行 `./scripts/run_web.sh`，或在一键启动时加上 `--with-web`。桌面 Web 与手机 H5 使用同一套识别用户账号，不使用管理后台账号。
+也可以执行 `./scripts/run_web.sh`。桌面 Web 与手机 H5 使用同一套识别用户账号，不使用管理后台账号。
 
 ### 7. 启动管理后台
 
