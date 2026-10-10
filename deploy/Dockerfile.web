@@ -1,17 +1,20 @@
 # Build the H5, desktop web, and admin frontends, then serve them with Nginx.
 # npm dependencies are installed in this image build. Do not npm install in a running container.
+# H5/Web share locales from /app/shared via Vite alias @shared → ../shared.
 
 FROM node:22-alpine AS h5
-WORKDIR /src
+WORKDIR /app/frontend-h5
 COPY frontend-h5/package.json frontend-h5/package-lock.json ./
 RUN npm ci
+COPY shared/ /app/shared/
 COPY frontend-h5/ ./
 RUN npm run build
 
 FROM node:22-alpine AS web
-WORKDIR /src
+WORKDIR /app/frontend-web
 COPY frontend-web/package.json frontend-web/package-lock.json ./
 RUN npm ci
+COPY shared/ /app/shared/
 COPY frontend-web/ ./
 RUN npm run build
 
@@ -24,7 +27,7 @@ RUN npm run build
 
 FROM nginx:1.27-alpine
 COPY deploy/nginx.conf /etc/nginx/nginx.conf
-COPY --from=h5 /src/dist /usr/share/nginx/h5
-COPY --from=web /src/dist /usr/share/nginx/web
+COPY --from=h5 /app/frontend-h5/dist /usr/share/nginx/h5
+COPY --from=web /app/frontend-web/dist /usr/share/nginx/web
 COPY --from=admin /src/dist /usr/share/nginx/admin
 EXPOSE 80 8080 8081
