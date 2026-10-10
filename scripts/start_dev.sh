@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start local stack: Redis + API + Celery worker + Celery beat (+ optional H5/Admin)
+# Start local stack: Redis + API + Celery worker + Celery beat (+ optional H5/Web/Admin)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,9 +8,11 @@ source "$ROOT/scripts/common.sh"
 
 WITH_H5=1
 WITH_ADMIN=0
+WITH_WEB=0
 API_PORT=8000
 H5_PORT=5173
 ADMIN_PORT=5174
+WEB_PORT=5175
 
 usage() {
   cat <<'EOF'
@@ -19,6 +21,7 @@ Usage: ./scripts/start_dev.sh [options]
 Options:
   --api-only       Only Redis + API + Celery worker/beat
   --with-admin     Also start admin frontend (5174)
+  --with-web       Also start desktop web frontend (5175)
   --no-h5          Do not start H5 frontend
   -h, --help       Show help
 EOF
@@ -26,8 +29,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --api-only) WITH_H5=0; WITH_ADMIN=0; shift ;;
+    --api-only) WITH_H5=0; WITH_ADMIN=0; WITH_WEB=0; shift ;;
     --with-admin) WITH_ADMIN=1; shift ;;
+    --with-web) WITH_WEB=1; shift ;;
     --no-h5) WITH_H5=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
@@ -83,7 +87,7 @@ else
   echo "WARN /ready endpoint not reachable yet" >&2
 fi
 
-# H5 / Admin need frontend cwd
+# H5 / Web / Admin need frontend cwd
 if [[ "$WITH_H5" -eq 1 ]]; then
   if is_port_listening "$H5_PORT"; then
     echo "OK  H5 port $H5_PORT already in use"
@@ -104,6 +108,16 @@ if [[ "$WITH_ADMIN" -eq 1 ]]; then
   fi
 fi
 
+if [[ "$WITH_WEB" -eq 1 ]]; then
+  if is_port_listening "$WEB_PORT"; then
+    echo "OK  Web port $WEB_PORT already in use"
+  elif [[ -d "$ROOT/frontend-web/node_modules" ]]; then
+    start_bg web bash -lc "cd \"$ROOT/frontend-web\" && npm run dev -- --host 0.0.0.0 --port $WEB_PORT"
+  else
+    echo "WARN frontend-web/node_modules missing, skip Web (run: cd frontend-web && npm install)"
+  fi
+fi
+
 cat <<EOF
 
 === Services ===
@@ -111,6 +125,7 @@ API:     http://127.0.0.1:${API_PORT}/health
 Ready:   http://127.0.0.1:${API_PORT}/ready
 Docs:    http://127.0.0.1:${API_PORT}/docs
 H5:      http://127.0.0.1:${H5_PORT}/
+Web:     http://127.0.0.1:${WEB_PORT}/   (if --with-web)
 Admin:   http://127.0.0.1:${ADMIN_PORT}/   (if --with-admin)
 Celery:  worker + beat started (see logs)
 

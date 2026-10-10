@@ -13,6 +13,7 @@ docker compose up -d --build
 ```
 
 - H5：`http://服务器:80`
+- 桌面 Web：`http://服务器:8081`
 - 管理端：`http://服务器:8080`
 - 健康检查：`http://服务器/health`
 - 就绪检查：`http://服务器/ready`（应能看到 Celery worker）

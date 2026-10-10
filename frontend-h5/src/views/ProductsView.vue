@@ -44,7 +44,7 @@
           <span>💰 {{ item.price != null ? `¥${item.price}` : '-' }}</span>
         </div>
         <div class="muted">SKU：{{ item.sku }}</div>
-        <div class="muted">适配：{{ item.fitment || '-' }}</div>
+        <div class="muted">适配车型：{{ item.fitment || '-' }}</div>
         <div class="muted">零件号：{{ partNumbers(item) }}</div>
         <van-tag plain type="primary">🔎 {{ item.match_reason || '匹配结果' }}</van-tag>
       </div>

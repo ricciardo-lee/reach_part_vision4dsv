@@ -7,6 +7,7 @@
 ```text
 backend/           FastAPI + Tortoise + Celery + MinIO
 frontend-h5/       手机端 H5（Vue3 + Vant）
+frontend-web/      桌面端 Web（Vue3 + Element Plus）
 frontend-admin/    管理后台（Vue3 + Element Plus）
 scripts/           本地辅助脚本
 ```
@@ -15,6 +16,7 @@ scripts/           本地辅助脚本
 
 - 后端：FastAPI、Pydantic V2、Tortoise ORM、MySQL 8、Redis、Celery、MinIO、OpenAI SDK（DeepSeek 兼容）
 - H5：Vue 3、Vite、Pinia、Vue Router、Axios、Vant（移动优先 + Emoji）
+- 桌面 Web：Vue 3、Vite、Pinia、Vue Router、Axios、Element Plus
 - 管理端：Vue 3、Element Plus
 
 ## 重要约束
@@ -54,19 +56,21 @@ python -m app.scripts.init_minio
 
 ### 4. 一键启动（推荐）
 
-自动检查/启动本地 Redis，并后台拉起 API + Celery worker + H5：
+自动检查/启动本地 Redis，并后台拉起 API + Celery worker + H5。桌面 Web 和管理后台按参数可选启动。
 
 ```bash
 ./scripts/start_dev.sh
 # 仅后端：
 ./scripts/start_dev.sh --api-only
+# 含桌面 Web：
+./scripts/start_dev.sh --with-web
 # 含管理后台：
 ./scripts/start_dev.sh --with-admin
 # 停止：
 ./scripts/stop_dev.sh
 ```
 
-日志目录：`backend/logs/`（`api.log` / `celery.log` / `h5.log`）
+日志目录：`backend/logs/`（`api.log` / `celery.log` / `h5.log`，开启对应前端时还有 `web.log` / `admin.log`）
 
 也可分开启动：
 
@@ -90,7 +94,19 @@ npm run dev
 
 访问：<http://127.0.0.1:5173>
 
-### 6. 启动管理后台
+### 6. 启动桌面 Web
+
+```bash
+cd frontend-web
+npm install
+npm run dev
+```
+
+访问：<http://127.0.0.1:5175>
+
+也可以执行 `./scripts/run_web.sh`，或在一键启动时加上 `--with-web`。桌面 Web 与手机 H5 使用同一套识别用户账号，不使用管理后台账号。
+
+### 7. 启动管理后台
 
 ```bash
 cd frontend-admin
@@ -147,6 +163,20 @@ API 首次启动会建出空表。海豚不要再用全 `LONGTEXT`、无主键�
 车型和 OE 两个区域各自有「清空」。清空车型不影响 OE；清空 OE 会清掉输入、铭牌图和识别结果。
 
 识别完成后直接查看产品。SKU 直匹配和品类匹配都不再提供「改用原识别方式」。图库未命中时，识别流程仍会自动回退到品类识别。
+
+## 桌面 Web
+
+`frontend-web` 给普通识别用户使用，业务步骤与手机 H5 相同：登录、上传 1–8 张照片、可选车型或 OE、识别、确认品类、查看产品和反馈。线上由 Nginx 的 `8081` 端口提供，本地开发端口是 `5175`。
+
+桌面页面按宽屏工作台操作：
+
+- 上传页左侧是拖拽区和当前大图，右侧是车型与 OE。授权、进度和主操作在底部操作条。图片支持拖拽、粘贴和多选，单张不超过 10MB。
+- 品牌、车系、车型和年款在宽屏同一行，使用与手机 H5 相同的分级目录，可搜索选择。
+- 品类页左侧切换原图和去背景图，右侧确认 Top3 或手动品类。
+- 产品页左侧是候选列表，右侧是当前产品详情和 360 对照。360 图可以用鼠标拖动、滚轮或方向键旋转。
+- 顶栏可以退出登录。确认品类和查看产品只有在本次会话已经得到对应结果时才能进入。刷新后仍需重新开始，当前版本不保存历史记录。
+
+车型、OE、优化授权和反馈规则与手机 H5 相同。
 
 ## 核心业务 API
 

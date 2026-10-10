@@ -69,7 +69,7 @@ def _progress_hint(
     if status == "done" and recognition_mode == "category_match":
         return "已确认品类，请从候选产品中选择"
     if status == "processing":
-        return "识别中（优先图库匹配）…"
+        return "识别中…"
     mapping = {
         "created": "等待上传",
         "uploading": "图片已上传，准备识别",
