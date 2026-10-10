@@ -1,10 +1,12 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import 'element-plus/dist/index.css'
 import App from './App.vue'
 import router from './router'
+import { applyDocumentLang, i18n } from './i18n'
 import './styles/desktop.css'
 
-createApp(App).use(createPinia()).use(router).use(ElementPlus, { locale: zhCn }).mount('#app')
+applyDocumentLang()
+
+createApp(App).use(createPinia()).use(i18n).use(router).use(ElementPlus).mount('#app')

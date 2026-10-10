@@ -1,20 +1,22 @@
 <template>
   <section v-if="partImages.length" class="card">
-    <h3 class="title-row"><span class="emoji" aria-hidden="true">🖼️</span> 本次检索图片</h3>
-    <p class="muted">左侧是上传原图。右侧是去掉背景并补成白底后，实际用来检索匹配的图片。</p>
+    <h3 class="title-row"><span class="emoji" aria-hidden="true">🖼️</span> {{ t('gallery.title') }}</h3>
+    <p class="muted">{{ t('gallery.hintShort') }}</p>
     <div v-for="(image, index) in partImages" :key="image.id || index" class="pair">
       <figure>
-        <img v-if="srcOf(image.preview_url)" :src="srcOf(image.preview_url)" alt="上传原图" />
-        <div v-else class="empty">{{ placeholder(image.preview_url, '无原图') }}</div>
-        <figcaption>原图 {{ index + 1 }}</figcaption>
+        <img v-if="srcOf(image.preview_url)" :src="srcOf(image.preview_url)" :alt="t('gallery.originalAlt')" />
+        <div v-else class="empty">{{ placeholder(image.preview_url, t('gallery.noOriginal')) }}</div>
+        <figcaption>{{ t('gallery.original', { n: index + 1 }) }}</figcaption>
       </figure>
       <figure>
         <img
           v-if="srcOf(image.foreground_preview_url)"
           :src="srcOf(image.foreground_preview_url)"
-          alt="去背景检索图"
+          :alt="t('gallery.foregroundAlt')"
         />
-        <div v-else class="empty">{{ placeholder(image.foreground_preview_url, '未能去掉背景，检索使用原图') }}</div>
+        <div v-else class="empty">
+          {{ placeholder(image.foreground_preview_url, t('gallery.fallbackFull')) }}
+        </div>
         <figcaption>{{ sourceLabel(image.foreground_source) }}</figcaption>
       </figure>
     </div>
@@ -23,7 +25,11 @@
 
 <script setup>
 import { computed, onBeforeUnmount, reactive, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { foregroundSourceKey } from '@shared/locales/index.js'
 import api from '@/api/client'
+
+const { t } = useI18n()
 
 const props = defineProps({
   images: { type: Array, default: () => [] },
@@ -49,8 +55,8 @@ function srcOf(url) {
 
 function placeholder(url, emptyText) {
   if (!url) return emptyText
-  if (failed[url]) return '图片加载失败'
-  return '加载中'
+  if (failed[url]) return t('common.imageLoadFailed')
+  return t('common.loading')
 }
 
 async function loadUrl(url) {
@@ -93,10 +99,7 @@ onBeforeUnmount(() => {
 })
 
 function sourceLabel(source) {
-  if (source === 'birefnet' || source === 'sam_guided') return '用于检索匹配'
-  if (source === 'heuristic_fallback') return '未能去掉背景，检索使用原图裁剪'
-  if (source === 'full_only') return '未能去掉背景，检索使用原图'
-  return '用于检索匹配'
+  return t(foregroundSourceKey(source))
 }
 </script>
 

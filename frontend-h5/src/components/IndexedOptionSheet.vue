@@ -8,15 +8,15 @@
   >
     <div class="sheet">
       <div class="sheet-header">
-        <button type="button" class="link" @click="close">取消</button>
-        <strong>{{ title }}</strong>
+        <button type="button" class="link" @click="close">{{ t('common.cancel') }}</button>
+        <strong>{{ title || t('common.pleaseSelect') }}</strong>
         <span class="spacer" />
       </div>
       <van-field
         v-model="keyword"
         clearable
         left-icon="search"
-        placeholder="搜索"
+        :placeholder="t('common.search')"
         class="search"
       />
       <div class="sheet-body">
@@ -33,7 +33,7 @@
             />
           </div>
         </van-index-bar>
-        <p v-else class="empty muted">暂无匹配项</p>
+        <p v-else class="empty muted">{{ t('common.noMatch') }}</p>
       </div>
     </div>
   </van-popup>
@@ -41,10 +41,13 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   show: { type: Boolean, default: false },
-  title: { type: String, default: '请选择' },
+  title: { type: String, default: '' },
   /** { letters, groups: [{ letter, items: [{value,label,letter}] }], items } */
   indexed: { type: Object, default: () => ({ letters: [], groups: [], items: [] }) },
 })

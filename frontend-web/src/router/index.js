@@ -1,15 +1,10 @@
+import { watch } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '@/views/HomeView.vue'
 import LoginView from '@/views/LoginView.vue'
 import ResultView from '@/views/ResultView.vue'
 import ProductsView from '@/views/ProductsView.vue'
-
-const titles = {
-  login: '登录',
-  home: '上传找货',
-  result: '确认品类',
-  products: '查看产品',
-}
+import { i18n } from '@/i18n'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -31,9 +26,28 @@ router.beforeEach((to) => {
   if (to.path === '/login' && token) return '/'
 })
 
-router.afterEach((to) => {
-  const page = titles[to.name] || '零件识图找货'
+function pageTitle(name) {
+  const key = {
+    login: 'titles.login',
+    home: 'titles.home',
+    result: 'titles.result',
+    products: 'titles.products',
+  }[name]
+  return key ? i18n.global.t(key) : i18n.global.t('common.appName')
+}
+
+export function syncDocumentTitle(route = router.currentRoute.value) {
+  const page = pageTitle(route.name)
   document.title = `${page} · REACH Part Finder`
+}
+
+router.afterEach((to) => {
+  syncDocumentTitle(to)
 })
+
+watch(
+  () => i18n.global.locale.value,
+  () => syncDocumentTitle(),
+)
 
 export default router

@@ -19,7 +19,7 @@ async def get_file(object_key: str, _: AppUser = Depends(get_current_app_user)) 
     try:
         data = storage.get_bytes(object_key)
     except Exception as exc:  # noqa: BLE001
-        raise NotFoundError("文件不存在") from exc
+        raise NotFoundError("文件不存在", message_key="files.not_found") from exc
 
     media_type = "image/jpeg"
     if isinstance(storage, LocalStorage):

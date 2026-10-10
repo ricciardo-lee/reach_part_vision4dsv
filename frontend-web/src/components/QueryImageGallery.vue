@@ -1,11 +1,11 @@
 <template>
   <section v-if="partImages.length" class="gallery" :class="{ panel: !bare, workbench }">
     <div v-if="!workbench" class="section-head">
-      <h3>本次检索图片</h3>
+      <h3>{{ t('gallery.title') }}</h3>
     </div>
-    <p v-if="!workbench" class="muted">左侧是上传原图。右侧是去掉背景并补成白底后，实际用来检索匹配的图片。点击图片可放大。</p>
+    <p v-if="!workbench" class="muted">{{ t('gallery.hint') }}</p>
 
-    <div v-if="workbench" class="thumbs" role="tablist" aria-label="检索图片">
+    <div v-if="workbench" class="thumbs" role="tablist" :aria-label="t('gallery.thumbsAria')">
       <button
         v-for="(image, index) in partImages"
         :key="image.id || index"
@@ -15,7 +15,7 @@
         :class="{ active: index === activeIndex }"
         @click="activeIndex = index"
       >
-        <img v-if="srcOf(image.preview_url)" :src="srcOf(image.preview_url)" :alt="`原图 ${index + 1}`" />
+        <img v-if="srcOf(image.preview_url)" :src="srcOf(image.preview_url)" :alt="t('gallery.original', { n: index + 1 })" />
         <span v-else>{{ index + 1 }}</span>
       </button>
     </div>
@@ -23,10 +23,10 @@
     <div v-for="(image, index) in visibleImages" :key="image.id || index" class="pair">
       <figure>
         <button type="button" class="frame" :disabled="!srcOf(image.preview_url)" @click="open(image.preview_url)">
-          <img v-if="srcOf(image.preview_url)" :src="srcOf(image.preview_url)" alt="上传原图" />
-          <span v-else class="empty">{{ placeholder(image.preview_url, '无原图') }}</span>
+          <img v-if="srcOf(image.preview_url)" :src="srcOf(image.preview_url)" :alt="t('gallery.originalAlt')" />
+          <span v-else class="empty">{{ placeholder(image.preview_url, t('gallery.noOriginal')) }}</span>
         </button>
-        <figcaption>原图 {{ displayIndex(index) }}</figcaption>
+        <figcaption>{{ t('gallery.original', { n: displayIndex(index) }) }}</figcaption>
       </figure>
       <figure>
         <button
@@ -38,9 +38,11 @@
           <img
             v-if="srcOf(image.foreground_preview_url)"
             :src="srcOf(image.foreground_preview_url)"
-            alt="去背景检索图"
+            :alt="t('gallery.foregroundAlt')"
           />
-          <span v-else class="empty">{{ placeholder(image.foreground_preview_url, '未能去掉背景，检索使用原图') }}</span>
+          <span v-else class="empty">{{
+            placeholder(image.foreground_preview_url, t('gallery.fallbackFull'))
+          }}</span>
         </button>
         <figcaption>{{ sourceLabel(image.foreground_source) }}</figcaption>
       </figure>
@@ -51,6 +53,8 @@
 
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { foregroundSourceKey } from '@shared/locales/index.js'
 import api from '@/api/client'
 import ImageLightbox from '@/components/ImageLightbox.vue'
 
@@ -60,6 +64,7 @@ const props = defineProps({
   workbench: { type: Boolean, default: false },
 })
 
+const { t } = useI18n()
 const resolved = reactive({})
 const failed = reactive({})
 const objectUrls = []
@@ -104,8 +109,8 @@ function srcOf(url) {
 
 function placeholder(url, emptyText) {
   if (!url) return emptyText
-  if (failed[url]) return '图片加载失败'
-  return '加载中'
+  if (failed[url]) return t('common.imageLoadFailed')
+  return t('common.loading')
 }
 
 function open(url) {
@@ -149,10 +154,7 @@ onBeforeUnmount(() => {
 })
 
 function sourceLabel(source) {
-  if (source === 'birefnet' || source === 'sam_guided') return '用于检索匹配'
-  if (source === 'heuristic_fallback') return '未能去掉背景，检索使用原图裁剪'
-  if (source === 'full_only') return '未能去掉背景，检索使用原图'
-  return '用于检索匹配'
+  return t(foregroundSourceKey(source))
 }
 </script>
 

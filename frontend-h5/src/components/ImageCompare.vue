@@ -1,7 +1,7 @@
 <template>
   <section v-if="userImages.length" class="card compare-card">
-    <h3 class="title-row"><span class="emoji" aria-hidden="true">🖼️</span> 图片对比</h3>
-    <p class="muted">左边是你拍的照片，右边按住拖动可旋转匹配产品的 360 图。点图片可看大图。</p>
+    <h3 class="title-row"><span class="emoji" aria-hidden="true">🖼️</span> {{ t('compare.title') }}</h3>
+    <p class="muted">{{ t('compare.hintShort') }}</p>
     <div class="compare">
       <div class="pane">
         <div
@@ -10,11 +10,11 @@
           @touchend="onTouchEnd('user', $event)"
           @click="preview(userSrc)"
         >
-          <img v-if="userSrc" :src="userSrc" alt="你的照片" />
+          <img v-if="userSrc" :src="userSrc" :alt="t('compare.userAlt')" />
           <div v-else class="empty">{{ userPlaceholder }}</div>
           <template v-if="userImages.length > 1">
-            <button type="button" class="nav prev" aria-label="上一张照片" @click.stop="stepUser(-1)">‹</button>
-            <button type="button" class="nav next" aria-label="下一张照片" @click.stop="stepUser(1)">›</button>
+            <button type="button" class="nav prev" :aria-label="t('compare.prev')" @click.stop="stepUser(-1)">‹</button>
+            <button type="button" class="nav next" :aria-label="t('compare.next')" @click.stop="stepUser(1)">›</button>
           </template>
         </div>
       </div>
@@ -28,9 +28,9 @@
           @pointercancel="onSpinUp"
           @click="preview(galleryShown)"
         >
-          <img v-if="galleryShown" :src="galleryShown" alt="360 图库" draggable="false" />
+          <img v-if="galleryShown" :src="galleryShown" :alt="t('compare.galleryAlt')" draggable="false" />
           <div v-else class="empty">{{ galleryPlaceholder }}</div>
-          <p v-if="views.length > 1" class="spin-hint">拖动以旋转</p>
+          <p v-if="views.length > 1" class="spin-hint">{{ t('compare.spinHintShort') }}</p>
         </div>
       </div>
     </div>
@@ -39,8 +39,11 @@
 
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { showImagePreview } from 'vant'
 import api from '@/api/client'
+
+const { t } = useI18n()
 
 const props = defineProps({
   images: { type: Array, default: () => [] },
@@ -76,11 +79,11 @@ const currentUser = computed(() => userImages.value[userIndex.value] || null)
 const currentView = computed(() => views.value[galleryIndex.value] || null)
 const userSrc = computed(() => srcOf(currentUser.value?.preview_url))
 const gallerySrc = computed(() => srcOf(currentView.value?.url))
-const userPlaceholder = computed(() => placeholder(currentUser.value?.preview_url, '无原图'))
+const userPlaceholder = computed(() => placeholder(currentUser.value?.preview_url, t('gallery.noOriginal')))
 const galleryPlaceholder = computed(() => {
-  if (!props.sku) return '暂无匹配产品'
-  if (!views.value.length) return '暂无 360 图'
-  return placeholder(currentView.value?.url, '暂无 360 图')
+  if (!props.sku) return t('compare.noProduct')
+  if (!views.value.length) return t('compare.no360')
+  return placeholder(currentView.value?.url, t('compare.no360'))
 })
 
 function needsAuthFetch(url) {
@@ -93,8 +96,8 @@ function srcOf(url) {
 
 function placeholder(url, emptyText) {
   if (!url) return emptyText
-  if (failed[url]) return '图片加载失败'
-  return '加载中'
+  if (failed[url]) return t('common.imageLoadFailed')
+  return t('common.loading')
 }
 
 async function loadUrl(url, token = null) {

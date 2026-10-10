@@ -1,24 +1,30 @@
 <template>
   <div class="workbench products-workbench">
-    <div class="summary" aria-label="本次识别摘要">
-      <el-tag v-if="isSkuMatch" type="success">360 图库直匹配</el-tag>
-      <el-tag v-else-if="isCategoryMatch" type="primary">已确认品类</el-tag>
-      <el-tag v-else>品类查询</el-tag>
-      <span v-if="isSkuMatch">SKU {{ matchedSku || '-' }}<template v-if="matchScore != null"> · 相似度 {{ matchScore }}</template></span>
-      <span v-else>{{ categoryName || '-' }}<template v-if="visionAssisted"> · Vision 辅助</template></span>
-      <span>候选 {{ store.products.length }}</span>
-      <span>车型 {{ vehicleText }}</span>
-      <span>OE {{ store.session?.oe_number || '未填写' }}</span>
+    <div class="summary" :aria-label="t('products.summaryAria')">
+      <el-tag v-if="isSkuMatch" type="success">{{ t('mode.skuMatch') }}</el-tag>
+      <el-tag v-else-if="isCategoryMatch" type="primary">{{ t('mode.categoryMatch') }}</el-tag>
+      <el-tag v-else>{{ t('products.categoryQuery') }}</el-tag>
+      <span v-if="isSkuMatch">
+        {{ t('products.skuLine', { sku: matchedSku || '-' }) }}
+        <template v-if="matchScore != null"> · {{ t('products.similarity', { score: matchScore }) }}</template>
+      </span>
+      <span v-else>
+        {{ categoryName || '-' }}
+        <template v-if="visionAssisted"> · {{ t('products.visionAssisted') }}</template>
+      </span>
+      <span>{{ t('products.candidatesCount', { count: store.products.length }) }}</span>
+      <span>{{ t('products.vehicleLabel', { vehicle: vehicleText }) }}</span>
+      <span>{{ t('products.oeLabel', { oe: store.session?.oe_number || t('common.notFilled') }) }}</span>
     </div>
 
     <div class="workbench-split">
       <el-card class="pane list-pane" shadow="never">
-        <template #header>候选产品</template>
+        <template #header>{{ t('products.candidatesHeader') }}</template>
         <div
           v-if="store.products.length"
           class="product-list"
           role="listbox"
-          aria-label="匹配产品"
+          :aria-label="t('products.matchProductsAria')"
           tabindex="0"
           @keydown="onProductKey"
         >
@@ -37,23 +43,29 @@
               <strong>{{ item.name }}</strong>
               <span>{{ item.price != null ? `¥${item.price}` : '-' }}</span>
             </span>
-            <span class="muted">SKU {{ item.sku }}</span>
-            <span class="muted">{{ item.fitment || '适配未填写' }}</span>
+            <span class="muted">{{ t('products.skuLine', { sku: item.sku }) }}</span>
+            <span class="muted">{{ item.fitment || t('products.fitmentMissing') }}</span>
           </button>
         </div>
-        <p v-else class="muted">暂无匹配产品。可返回修改品类、车型或 OE 后再试。</p>
+        <p v-else class="muted">{{ t('products.empty') }}</p>
       </el-card>
 
       <el-card class="pane detail-pane" shadow="never">
-        <template #header>产品详情</template>
+        <template #header>{{ t('products.detailHeader') }}</template>
         <template v-if="activeProduct">
           <el-descriptions :column="2" border size="small">
-            <el-descriptions-item label="名称">{{ activeProduct.name }}</el-descriptions-item>
-            <el-descriptions-item label="价格">{{ activeProduct.price != null ? `¥${activeProduct.price}` : '-' }}</el-descriptions-item>
-            <el-descriptions-item label="SKU">{{ activeProduct.sku }}</el-descriptions-item>
-            <el-descriptions-item label="零件号">{{ partNumbers(activeProduct) }}</el-descriptions-item>
-            <el-descriptions-item label="适配车型" :span="2">{{ activeProduct.fitment || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="匹配原因" :span="2">{{ activeProduct.match_reason || '匹配结果' }}</el-descriptions-item>
+            <el-descriptions-item :label="t('products.name')">{{ activeProduct.name }}</el-descriptions-item>
+            <el-descriptions-item :label="t('products.price')">{{
+              activeProduct.price != null ? `¥${activeProduct.price}` : '-'
+            }}</el-descriptions-item>
+            <el-descriptions-item :label="t('products.sku')">{{ activeProduct.sku }}</el-descriptions-item>
+            <el-descriptions-item :label="t('products.partNumber')">{{ partNumbers(activeProduct) }}</el-descriptions-item>
+            <el-descriptions-item :label="t('products.fitmentField')" :span="2">{{
+              activeProduct.fitment || '-'
+            }}</el-descriptions-item>
+            <el-descriptions-item :label="t('products.matchReason')" :span="2">{{
+              activeProduct.match_reason || t('products.matchResult')
+            }}</el-descriptions-item>
           </el-descriptions>
           <ImageCompare
             embedded
@@ -62,13 +74,13 @@
             :preferred="preferredView"
           />
         </template>
-        <p v-else class="muted">选择左侧候选后，这里显示详情和 360 图。</p>
+        <p v-else class="muted">{{ t('products.pickHint') }}</p>
         <div class="detail-actions">
-          <el-button type="success" @click="feedback(true)">准确</el-button>
-          <el-button type="danger" plain @click="feedback(false)">不准</el-button>
+          <el-button type="success" @click="feedback(true)">{{ t('products.accurate') }}</el-button>
+          <el-button type="danger" plain @click="feedback(false)">{{ t('products.inaccurate') }}</el-button>
           <span class="spacer" />
-          <el-button @click="goBack">返回调整</el-button>
-          <el-button type="primary" @click="router.push('/')">再识一张</el-button>
+          <el-button @click="goBack">{{ t('products.back') }}</el-button>
+          <el-button type="primary" @click="router.push('/')">{{ t('products.again') }}</el-button>
         </div>
       </el-card>
     </div>
@@ -78,10 +90,13 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
+import { categoryLabelKey } from '@shared/locales/index.js'
 import { useRecognitionStore } from '@/stores/recognition'
 import ImageCompare from '@/components/ImageCompare.vue'
 
+const { t } = useI18n()
 const store = useRecognitionStore()
 const router = useRouter()
 const activeSku = ref('')
@@ -102,12 +117,15 @@ const preferredView = computed(() => {
 const isSkuMatch = computed(() => store.session?.recognition_mode === 'sku_match')
 const isCategoryMatch = computed(() => store.session?.recognition_mode === 'category_match')
 const matchedSku = computed(() => store.session?.retrieval?.matched_sku || store.products[0]?.sku)
-const categoryName = computed(
-  () =>
+const categoryName = computed(() => {
+  const raw =
     store.session?.retrieval?.selected_category_cn ||
     store.session?.confirmed_category_name ||
-    store.products[0]?.category_name,
-)
+    store.products[0]?.category_name
+  if (!raw) return ''
+  const key = categoryLabelKey(raw)
+  return key ? t(key) : raw
+})
 const visionAssisted = computed(() => Boolean(store.session?.retrieval?.vision_assisted))
 const matchScore = computed(() => {
   const score = store.session?.retrieval?.score
@@ -121,13 +139,13 @@ const vehicleText = computed(() => {
     store.session?.vehicle_model,
     store.session?.vehicle_year,
   ].filter(Boolean)
-  return parts.length ? parts.join(' / ') : '未选择'
+  return parts.length ? parts.join(' / ') : t('common.notSelected')
 })
 
 async function feedback(correct) {
   try {
     await store.sendFeedback(correct)
-    ElMessage.success(correct ? '感谢反馈' : '已记录，我们会优化')
+    ElMessage.success(correct ? t('products.thanks') : t('products.recorded'))
   } catch {
     // The API client already shows the error.
   }

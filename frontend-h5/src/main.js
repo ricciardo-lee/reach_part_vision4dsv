@@ -18,11 +18,15 @@ import {
 } from 'vant'
 import App from './App.vue'
 import router from './router'
+import { applyDocumentLang, i18n } from './i18n'
 import 'vant/lib/index.css'
 import './styles/mobile.css'
 
+applyDocumentLang()
+
 const app = createApp(App)
 app.use(createPinia())
+app.use(i18n)
 app.use(router)
 ;[
   Button,

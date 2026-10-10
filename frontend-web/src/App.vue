@@ -1,79 +1,88 @@
 <template>
-  <div class="app-shell">
-    <a class="skip-link" href="#main">跳到主要内容</a>
-    <header class="topbar">
-      <div class="brand-block">
-        <span class="brand">REACH</span>
-        <span class="product">Part Finder</span>
+  <el-config-provider :locale="elementLocale">
+    <div class="app-shell">
+      <a class="skip-link" href="#main">{{ t('common.skipToMain') }}</a>
+      <header class="topbar">
+        <div class="brand-block">
+          <span class="brand">{{ t('common.brand') }}</span>
+          <span class="product">{{ t('common.product') }}</span>
+        </div>
+        <span class="spacer" />
+        <LocaleSwitcher />
+        <template v-if="showUser">
+          <span class="user" :title="displayName">{{ displayName }}</span>
+          <button type="button" class="logout" @click="logout">{{ t('common.signOut') }}</button>
+        </template>
+      </header>
+      <div v-if="showUser" class="subbar">
+        <el-steps :active="activeStep" finish-status="success" simple class="flow-steps">
+          <el-step>
+            <template #title>
+              <button type="button" class="step-btn" :aria-current="route.path === '/' ? 'page' : undefined" @click="router.push('/')">
+                {{ t('steps.upload') }}
+              </button>
+            </template>
+          </el-step>
+          <el-step>
+            <template #title>
+              <button
+                type="button"
+                class="step-btn"
+                :disabled="!canOpenResult"
+                :title="canOpenResult ? t('steps.confirm') : t('steps.confirmLocked')"
+                :aria-current="route.path === '/result' ? 'page' : undefined"
+                @click="go('/result', canOpenResult)"
+              >
+                {{ t('steps.confirm') }}
+              </button>
+            </template>
+          </el-step>
+          <el-step>
+            <template #title>
+              <button
+                type="button"
+                class="step-btn"
+                :disabled="!canOpenProducts"
+                :title="canOpenProducts ? t('steps.products') : t('steps.productsLocked')"
+                :aria-current="route.path === '/products' ? 'page' : undefined"
+                @click="go('/products', canOpenProducts)"
+              >
+                {{ t('steps.products') }}
+              </button>
+            </template>
+          </el-step>
+        </el-steps>
+        <div v-if="store.session" class="session-summary" :aria-label="t('session.aria')">
+          <el-tag v-if="modeLabel" size="small" :type="modeTagType">{{ modeLabel }}</el-tag>
+          <span>{{ t('session.images', { count: partCount }) }}</span>
+          <span>{{ t('session.vehicle', { vehicle: vehicleText }) }}</span>
+          <span>{{ t('session.oe', { oe: store.session.oe_number || t('common.notFilled') }) }}</span>
+        </div>
       </div>
-      <span class="spacer" />
-      <template v-if="showUser">
-        <span class="user" :title="displayName">{{ displayName }}</span>
-        <button type="button" class="logout" @click="logout">退出登录</button>
-      </template>
-    </header>
-    <div v-if="showUser" class="subbar">
-      <el-steps :active="activeStep" finish-status="success" simple class="flow-steps">
-        <el-step>
-          <template #title>
-            <button type="button" class="step-btn" :aria-current="route.path === '/' ? 'page' : undefined" @click="router.push('/')">
-              上传找货
-            </button>
-          </template>
-        </el-step>
-        <el-step>
-          <template #title>
-            <button
-              type="button"
-              class="step-btn"
-              :disabled="!canOpenResult"
-              :title="canOpenResult ? '确认品类' : '完成识别后可进入'"
-              :aria-current="route.path === '/result' ? 'page' : undefined"
-              @click="go('/result', canOpenResult)"
-            >
-              确认品类
-            </button>
-          </template>
-        </el-step>
-        <el-step>
-          <template #title>
-            <button
-              type="button"
-              class="step-btn"
-              :disabled="!canOpenProducts"
-              :title="canOpenProducts ? '查看产品' : '查出产品后可进入'"
-              :aria-current="route.path === '/products' ? 'page' : undefined"
-              @click="go('/products', canOpenProducts)"
-            >
-              查看产品
-            </button>
-          </template>
-        </el-step>
-      </el-steps>
-      <div v-if="store.session" class="session-summary" aria-label="当前识别会话">
-        <el-tag v-if="modeLabel" size="small" :type="modeTagType">{{ modeLabel }}</el-tag>
-        <span>图片 {{ partCount }} 张</span>
-        <span>车型 {{ vehicleText }}</span>
-        <span>OE {{ store.session.oe_number || '未填写' }}</span>
-      </div>
+      <main id="main">
+        <router-view />
+      </main>
     </div>
-    <main id="main">
-      <router-view />
-    </main>
-  </div>
+  </el-config-provider>
 </template>
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import en from 'element-plus/es/locale/lang/en'
 import { clearAppAuth } from '@/api/client'
+import LocaleSwitcher from '@/components/LocaleSwitcher.vue'
 import { useRecognitionStore } from '@/stores/recognition'
 
+const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const store = useRecognitionStore()
 const displayName = ref(localStorage.getItem('app_name') || localStorage.getItem('app_username') || '')
 const showUser = computed(() => route.path !== '/login')
+const elementLocale = computed(() => (locale.value === 'en-US' ? en : zhCn))
 const activeStep = computed(() => {
   if (route.path === '/products') return 2
   if (route.path === '/result') return 1
@@ -101,14 +110,14 @@ const vehicleText = computed(() => {
     store.session?.vehicle_model,
     store.session?.vehicle_year,
   ].filter(Boolean)
-  return parts.length ? parts.join(' / ') : '未选择'
+  return parts.length ? parts.join(' / ') : t('common.notSelected')
 })
 const modeLabel = computed(() => {
   const mode = store.session?.recognition_mode
-  if (mode === 'sku_match') return '360 图库直匹配'
-  if (mode === 'category_match') return '已确认品类'
-  if (mode === 'vision_fallback') return '品类识别'
-  if (store.session?.is_auto_part === false) return '非汽配'
+  if (mode === 'sku_match') return t('mode.skuMatch')
+  if (mode === 'category_match') return t('mode.categoryMatch')
+  if (mode === 'vision_fallback') return t('mode.visionFallback')
+  if (store.session?.is_auto_part === false) return t('mode.nonAutoPart')
   return ''
 })
 const modeTagType = computed(() => {

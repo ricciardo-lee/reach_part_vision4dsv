@@ -1,27 +1,36 @@
 <template>
   <div class="page login-page">
     <section class="card">
-      <h1>零件识图找货</h1>
-      <p class="muted">请使用管理员分配的账号登录</p>
-      <van-field v-model="username" label="用户名" placeholder="请输入用户名" autocomplete="username" />
+      <h1>{{ t('common.appName') }}</h1>
+      <p class="muted">{{ t('login.subtitle') }}</p>
+      <van-field
+        v-model="username"
+        :label="t('login.username')"
+        :placeholder="t('login.usernamePlaceholder')"
+        autocomplete="username"
+      />
       <van-field
         v-model="password"
-        label="密码"
+        :label="t('login.password')"
         type="password"
-        placeholder="请输入密码"
+        :placeholder="t('login.passwordPlaceholder')"
         autocomplete="current-password"
         @keyup.enter="submit"
       />
-      <van-button type="primary" block round :loading="loading" @click="submit">登录</van-button>
+      <van-button type="primary" block round :loading="loading" @click="submit">
+        {{ t('login.submit') }}
+      </van-button>
     </section>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import api from '@/api/client'
 
+const { t } = useI18n()
 const router = useRouter()
 const username = ref('')
 const password = ref('')

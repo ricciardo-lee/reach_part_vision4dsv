@@ -22,7 +22,7 @@ async def login(payload: AppLoginIn, request: Request) -> APIResponse:
     user = await AppUser.get_or_none(username=username, is_active=True)
     if not user or not verify_password(payload.password, user.password_hash):
         logger.warning("App user login failed | username=%s", username)
-        raise UnauthorizedError("用户名或密码错误")
+        raise UnauthorizedError("用户名或密码错误", message_key="auth.bad_credentials")
     user.last_login_at = datetime.utcnow()
     await user.save()
     ip_address = request.client.host if request.client else ""

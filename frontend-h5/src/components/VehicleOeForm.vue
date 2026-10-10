@@ -2,27 +2,64 @@
   <div>
     <section class="card">
       <div class="section-head">
-        <h3>车型（可选）</h3>
-        <button type="button" class="clear-btn" :disabled="!vehicleFilled" @click="clearVehicle">清空</button>
+        <h3>{{ t('vehicle.title') }}</h3>
+        <button type="button" class="clear-btn" :disabled="!vehicleFilled" @click="clearVehicle">
+          {{ t('common.clear') }}
+        </button>
       </div>
-      <van-field v-model="brand" is-link readonly label="品牌" placeholder="请选择" @click="openBrand" />
-      <van-field v-model="series" is-link readonly label="车系" placeholder="请选择" @click="openSeries" />
-      <van-field v-model="model" is-link readonly label="车型" placeholder="请选择" @click="openModels" />
-      <van-field v-model="year" is-link readonly label="年款" placeholder="请选择" @click="openYears" />
+      <van-field
+        v-model="brand"
+        is-link
+        readonly
+        :label="t('vehicle.brand')"
+        :placeholder="t('common.pleaseSelect')"
+        @click="openBrand"
+      />
+      <van-field
+        v-model="series"
+        is-link
+        readonly
+        :label="t('vehicle.series')"
+        :placeholder="t('common.pleaseSelect')"
+        @click="openSeries"
+      />
+      <van-field
+        v-model="model"
+        is-link
+        readonly
+        :label="t('vehicle.model')"
+        :placeholder="t('common.pleaseSelect')"
+        @click="openModels"
+      />
+      <van-field
+        v-model="year"
+        is-link
+        readonly
+        :label="t('vehicle.year')"
+        :placeholder="t('common.pleaseSelect')"
+        @click="openYears"
+      />
     </section>
 
     <section class="card">
       <div class="section-head">
-        <h3>OE 号（可选）</h3>
-        <button type="button" class="clear-btn" :disabled="!oeFilled" @click="clearOe">清空</button>
+        <h3>{{ t('oe.title') }}</h3>
+        <button type="button" class="clear-btn" :disabled="!oeFilled" @click="clearOe">
+          {{ t('common.clear') }}
+        </button>
       </div>
-      <van-field v-model="oeNumber" label="OE" placeholder="可手工输入 OE 号" @update:model-value="onOeEdit" />
+      <van-field
+        v-model="oeNumber"
+        :label="t('oe.label')"
+        :placeholder="t('oe.placeholder')"
+        @update:model-value="onOeEdit"
+      />
       <van-uploader v-model="oeFiles" :max-count="1" accept="image/*" capture="environment" :after-read="onOeRead" />
       <van-button size="small" type="primary" plain style="margin-top: 8px" :loading="ocrLoading" @click="runOeOcr">
-        🏷️ 识别铭牌 OE
+        {{ t('oe.recognizeEmoji') }}
       </van-button>
       <div v-if="store.oeOcrMeta" class="muted" style="margin-top: 8px">
-        OCR 置信度 {{ Math.round((store.oeOcrMeta.confidence || 0) * 100) }}%
+        {{ t('oe.confidence', { pct: Math.round((store.oeOcrMeta.confidence || 0) * 100) }) }}
         <span v-if="store.oeOcrMeta.reason"> · {{ store.oeOcrMeta.reason }}</span>
       </div>
       <div v-if="store.oeCandidates.length" style="margin-top: 8px">
@@ -44,29 +81,46 @@
           :loading="confirmOeLoading"
           @click="confirmOe"
         >
-          ✅ 确认 OE：{{ oeNumber || '请选择' }}
+          ✅ {{ t('oe.confirmWithValue', { value: oeNumber || t('oe.pleasePick') }) }}
         </van-button>
-        <p class="muted">使用铭牌候选时，请先点确认。</p>
-        <p v-if="store.oeConfirmed" class="muted" style="color: #15803d">已确认 OE</p>
+        <p class="muted">{{ t('oe.confirmHintShort') }}</p>
+        <p v-if="store.oeConfirmed" class="muted" style="color: #15803d">{{ t('oe.confirmed') }}</p>
       </div>
     </section>
 
     <van-popup v-model:show="showYear" position="bottom" round>
       <van-picker :columns="yearColumns" @confirm="onYear" @cancel="showYear = false" />
     </van-popup>
-    <IndexedOptionSheet v-model:show="showBrand" title="选择品牌" :indexed="brandIndexed" @select="onBrandSelect" />
-    <IndexedOptionSheet v-model:show="showSeries" title="选择车系" :indexed="seriesIndexed" @select="onSeriesSelect" />
-    <IndexedOptionSheet v-model:show="showModel" title="选择车型" :indexed="modelIndexed" @select="onModelSelect" />
+    <IndexedOptionSheet
+      v-model:show="showBrand"
+      :title="t('vehicle.selectBrand')"
+      :indexed="brandIndexed"
+      @select="onBrandSelect"
+    />
+    <IndexedOptionSheet
+      v-model:show="showSeries"
+      :title="t('vehicle.selectSeries')"
+      :indexed="seriesIndexed"
+      @select="onSeriesSelect"
+    />
+    <IndexedOptionSheet
+      v-model:show="showModel"
+      :title="t('vehicle.selectModel')"
+      :indexed="modelIndexed"
+      @select="onModelSelect"
+    />
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { showToast } from 'vant'
 import api from '@/api/client'
 import { useRecognitionStore } from '@/stores/recognition'
 import IndexedOptionSheet from '@/components/IndexedOptionSheet.vue'
 
+const { t } = useI18n()
 const store = useRecognitionStore()
 const ocrLoading = ref(false)
 const confirmOeLoading = ref(false)
@@ -109,7 +163,8 @@ const oeFilled = computed(() =>
 function yearLabel(value) {
   const text = String(value || '')
   if (!text) return ''
-  return text.endsWith('款') || !/^\d+$/.test(text) ? text : `${text}款`
+  if (text.endsWith('款') || !/^\d+$/.test(text)) return text
+  return t('vehicle.yearSuffix', { year: text })
 }
 
 function hydrate() {
@@ -145,12 +200,12 @@ function pickOe(oe) {
 }
 
 async function confirmOe() {
-  if (!oeNumber.value) return showToast('请先选择或填写 OE')
+  if (!oeNumber.value) return showToast(t('oe.needOe'))
   confirmOeLoading.value = true
   try {
     await store.confirmOe(oeNumber.value)
     usedOcrCandidate.value = true
-    showToast('OE 已确认')
+    showToast(t('oe.oeConfirmedToast'))
   } finally {
     confirmOeLoading.value = false
   }
@@ -162,7 +217,7 @@ async function ensureSession() {
 
 async function runOeOcr() {
   if (!oeFileObj.value) {
-    showToast('请先拍摄铭牌/包装图')
+    showToast(t('oe.needPlateImageShort'))
     return
   }
   ocrLoading.value = true
@@ -190,14 +245,14 @@ async function openBrand() {
 }
 
 async function openSeries() {
-  if (!brandValue.value) return showToast('请先选择品牌')
+  if (!brandValue.value) return showToast(t('vehicle.needBrand'))
   const res = await api.get('/api/v1/public/vehicle/series/indexed', { params: { brand: brandValue.value } })
   seriesIndexed.value = res.data || emptyIndexed()
   showSeries.value = true
 }
 
 async function openModels() {
-  if (!seriesValue.value) return showToast('请先选择车系')
+  if (!seriesValue.value) return showToast(t('vehicle.needSeries'))
   const res = await api.get('/api/v1/public/vehicle/models/indexed', {
     params: { brand: brandValue.value, series: seriesValue.value },
   })
@@ -206,7 +261,7 @@ async function openModels() {
 }
 
 async function openYears() {
-  if (!modelValue.value) return showToast('请先选择车型')
+  if (!modelValue.value) return showToast(t('vehicle.needModel'))
   const res = await api.get('/api/v1/public/vehicle/years', {
     params: { brand: brandValue.value, series: seriesValue.value, model: modelValue.value },
   })
@@ -266,7 +321,7 @@ function currentPayload() {
 function validateOe() {
   const oe = oeNumber.value.trim()
   if (store.oeCandidates.length && oe && usedOcrCandidate.value && !store.oeConfirmed) {
-    showToast('请先确认铭牌 OE')
+    showToast(t('oe.needConfirm'))
     return false
   }
   return true
@@ -326,7 +381,7 @@ onMounted(async () => {
   try {
     await loadBrands()
   } catch (err) {
-    showToast(err?.message || '车型目录暂不可用')
+    showToast(err?.message || t('vehicle.catalogUnavailable'))
   }
 })
 

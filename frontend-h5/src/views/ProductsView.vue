@@ -2,33 +2,35 @@
   <div class="page">
     <section class="card">
       <van-steps :active="2" active-color="#2563eb">
-        <van-step>上传找货</van-step>
-        <van-step>确认品类</van-step>
-        <van-step>查看产品</van-step>
+        <van-step>{{ t('steps.upload') }}</van-step>
+        <van-step>{{ t('steps.confirm') }}</van-step>
+        <van-step>{{ t('steps.products') }}</van-step>
       </van-steps>
     </section>
 
     <ImageCompare :images="partImages" :sku="activeProduct?.sku || ''" :preferred="preferredView" />
 
     <section class="card">
-      <h2 class="title-row"><span class="emoji" aria-hidden="true">📦</span> 匹配产品</h2>
+      <h2 class="title-row"><span class="emoji" aria-hidden="true">📦</span> {{ t('products.title') }}</h2>
       <p class="muted" v-if="isSkuMatch">
-        <van-tag type="success">🎯 360 图库直匹配</van-tag>
-        · SKU：{{ matchedSku || '-' }}
-        <span v-if="matchScore != null"> · 相似度 {{ matchScore }}</span>
+        <van-tag type="success">{{ t('mode.skuMatchEmoji') }}</van-tag>
+        · {{ t('products.skuLine', { sku: matchedSku || '-' }) }}
+        <span v-if="matchScore != null"> · {{ t('products.similarity', { score: matchScore }) }}</span>
       </p>
       <p class="muted" v-else-if="isCategoryMatch">
-        <van-tag type="primary">📁 已确认品类</van-tag>
+        <van-tag type="primary">{{ t('mode.categoryMatchEmoji') }}</van-tag>
         · {{ categoryName || '-' }}
-        <span v-if="visionAssisted"> · Vision 辅助</span>
+        <span v-if="visionAssisted"> · {{ t('products.visionAssisted') }}</span>
         <br />
-        待选择具体产品（共 {{ store.products.length }} 个候选）
+        {{ t('products.awaitingPick', { count: store.products.length }) }}
       </p>
       <p class="muted" v-else>
-        品类：{{ store.session?.confirmed_category_name || '-' }}
+        {{ t('products.categoryLabel', { name: confirmedCategoryName || '-' }) }}
       </p>
-      <p class="muted">车型：{{ vehicleText }} · OE：{{ store.session?.oe_number || '未填写' }}</p>
-      <p v-if="store.products.length > 1" class="muted">点下面的产品，可切换右侧对照的 360 图。</p>
+      <p class="muted">
+        {{ t('products.vehicleOeLine', { vehicle: vehicleText, oe: store.session?.oe_number || t('common.notFilled') }) }}
+      </p>
+      <p v-if="store.products.length > 1" class="muted">{{ t('products.switchHint') }}</p>
     </section>
 
     <section class="card" v-if="store.products.length">
@@ -43,40 +45,43 @@
           <strong>{{ item.name }}</strong>
           <span>💰 {{ item.price != null ? `¥${item.price}` : '-' }}</span>
         </div>
-        <div class="muted">SKU：{{ item.sku }}</div>
-        <div class="muted">适配车型：{{ item.fitment || '-' }}</div>
-        <div class="muted">零件号：{{ partNumbers(item) }}</div>
-        <van-tag plain type="primary">🔎 {{ item.match_reason || '匹配结果' }}</van-tag>
+        <div class="muted">{{ t('products.skuLine', { sku: item.sku }) }}</div>
+        <div class="muted">{{ t('products.fitment', { value: item.fitment || '-' }) }}</div>
+        <div class="muted">{{ t('products.partNumbers', { value: partNumbers(item) }) }}</div>
+        <van-tag plain type="primary">🔎 {{ item.match_reason || t('products.matchResult') }}</van-tag>
       </div>
     </section>
 
     <section class="card" v-else>
-      <p class="title-row"><span class="emoji">📭</span> 暂无匹配产品</p>
-      <p class="muted">可返回修改品类、车型或 OE 后再试。</p>
+      <p class="title-row"><span class="emoji">📭</span> {{ t('products.emptyTitle') }}</p>
+      <p class="muted">{{ t('products.emptyHint') }}</p>
     </section>
 
     <section class="card">
-      <h3 class="title-row"><span class="emoji" aria-hidden="true">🗣️</span> 本次识别准确吗？</h3>
+      <h3 class="title-row"><span class="emoji" aria-hidden="true">🗣️</span> {{ t('products.feedbackTitle') }}</h3>
       <div style="display: flex; gap: 8px">
-        <van-button type="success" block @click="feedback(true)">👍 准确</van-button>
-        <van-button type="danger" block plain @click="feedback(false)">👎 不准</van-button>
+        <van-button type="success" block @click="feedback(true)">{{ t('products.accurateEmoji') }}</van-button>
+        <van-button type="danger" block plain @click="feedback(false)">{{ t('products.inaccurateEmoji') }}</van-button>
       </div>
     </section>
 
     <div class="bottom-bar" style="display: flex; gap: 8px">
-      <van-button block round @click="goBack">↩️ 返回调整</van-button>
-      <van-button type="primary" block round @click="$router.push('/')">📷 再识一张</van-button>
+      <van-button block round @click="goBack">{{ t('products.backEmoji') }}</van-button>
+      <van-button type="primary" block round @click="$router.push('/')">{{ t('products.againEmoji') }}</van-button>
     </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
+import { categoryLabelKey } from '@shared/locales/index.js'
 import { useRecognitionStore } from '@/stores/recognition'
 import ImageCompare from '@/components/ImageCompare.vue'
 
+const { t } = useI18n()
 const store = useRecognitionStore()
 const router = useRouter()
 const activeSku = ref('')
@@ -97,12 +102,20 @@ const preferredView = computed(() => {
 const isSkuMatch = computed(() => store.session?.recognition_mode === 'sku_match')
 const isCategoryMatch = computed(() => store.session?.recognition_mode === 'category_match')
 const matchedSku = computed(() => store.session?.retrieval?.matched_sku || store.products[0]?.sku)
-const categoryName = computed(
-  () =>
+
+function displayCategory(idOrName) {
+  const key = categoryLabelKey(idOrName)
+  return key ? t(key) : idOrName || ''
+}
+
+const categoryName = computed(() => {
+  const raw =
     store.session?.retrieval?.selected_category_cn ||
     store.session?.confirmed_category_name ||
-    store.products[0]?.category_name,
-)
+    store.products[0]?.category_name
+  return displayCategory(raw)
+})
+const confirmedCategoryName = computed(() => displayCategory(store.session?.confirmed_category_name))
 const visionAssisted = computed(() => Boolean(store.session?.retrieval?.vision_assisted))
 const matchScore = computed(() => {
   const score = store.session?.retrieval?.score
@@ -116,12 +129,12 @@ const vehicleText = computed(() => {
     store.session?.vehicle_model,
     store.session?.vehicle_year,
   ].filter(Boolean)
-  return parts.length ? parts.join(' / ') : '未选择'
+  return parts.length ? parts.join(' / ') : t('common.notSelected')
 })
 
 async function feedback(correct) {
   await store.sendFeedback(correct)
-  showToast(correct ? '感谢反馈 🎉' : '已记录，我们会优化')
+  showToast(correct ? t('products.thanksEmoji') : t('products.recorded'))
 }
 
 function partNumbers(item) {

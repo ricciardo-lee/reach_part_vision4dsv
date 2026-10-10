@@ -1,12 +1,13 @@
 <template>
   <div class="app-shell">
     <header class="topbar">
-      <span class="brand">REACH</span>
-      <span class="product">Part Finder</span>
+      <span class="brand">{{ t('common.brand') }}</span>
+      <span class="product">{{ t('common.product') }}</span>
       <span class="spacer" />
+      <LocaleSwitcher />
       <template v-if="showUser">
         <span class="user">{{ displayName }}</span>
-        <button type="button" class="logout" @click="logout">退出</button>
+        <button type="button" class="logout" @click="logout">{{ t('common.signOutShort') }}</button>
       </template>
     </header>
     <router-view />
@@ -15,10 +16,13 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { clearAppAuth } from '@/api/client'
+import LocaleSwitcher from '@/components/LocaleSwitcher.vue'
 import { useRecognitionStore } from '@/stores/recognition'
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const store = useRecognitionStore()

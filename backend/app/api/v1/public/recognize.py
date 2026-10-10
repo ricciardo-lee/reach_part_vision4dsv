@@ -4,7 +4,7 @@ import logging
 import uuid
 from typing import List
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from app.core.config import settings
 from app.core.constants import (
@@ -14,6 +14,7 @@ from app.core.constants import (
     PART_PURPOSES,
 )
 from app.core.exceptions import AppError, RateLimitError
+from app.core.i18n import locale_from_request, t
 from app.api.deps import get_current_app_user, get_recognition_session
 from app.models import (
     AppUser,
@@ -227,6 +228,7 @@ async def get_session(session: RecognitionSession = Depends(get_recognition_sess
 
 @router.post("/{public_id}/images", response_model=APIResponse)
 async def upload_images(
+    request: Request,
     session: RecognitionSession = Depends(get_recognition_session),
     files: List[UploadFile] = File(...),
     purpose: str = Form(PART_IMAGE_PURPOSE),
@@ -236,16 +238,23 @@ async def upload_images(
     if purpose in PART_PURPOSES:
         purpose = PART_IMAGE_PURPOSE
     if purpose not in {PART_IMAGE_PURPOSE, OE_LABEL_PURPOSE}:
-        raise AppError("purpose 仅支持 part / oe_label（兼容旧角度字段会自动转为 part）")
+        raise AppError(
+            "purpose 仅支持 part / oe_label（兼容旧角度字段会自动转为 part）",
+            message_key="upload.purpose_invalid",
+        )
 
     if not files:
-        raise AppError("请至少上传 1 张图片")
+        raise AppError("请至少上传 1 张图片", message_key="upload.min_one")
 
     existing = await UploadedImage.filter(session_id=session.id, purpose=purpose, deleted_at=None).count()
     if purpose == OE_LABEL_PURPOSE:
         max_count = 1
         if existing + len(files) > max_count:
-            raise AppError(f"该用途最多上传 {max_count} 张图片")
+            raise AppError(
+                f"该用途最多上传 {max_count} 张图片",
+                message_key="upload.purpose_max",
+                message_params={"count": max_count},
+            )
     else:
         # All part images share one quota (1–8), independent of oe_label.
         part_total = await UploadedImage.filter(
@@ -254,9 +263,17 @@ async def upload_images(
             deleted_at=None,
         ).count()
         if part_total + len(files) > settings.MAX_IMAGES_PER_SESSION:
-            raise AppError(f"零件图合计最多上传 {settings.MAX_IMAGES_PER_SESSION} 张")
+            raise AppError(
+                f"零件图合计最多上传 {settings.MAX_IMAGES_PER_SESSION} 张",
+                message_key="upload.part_total_max",
+                message_params={"count": settings.MAX_IMAGES_PER_SESSION},
+            )
         if len(files) > settings.MAX_IMAGES_PER_SESSION:
-            raise AppError(f"单次最多上传 {settings.MAX_IMAGES_PER_SESSION} 张图片")
+            raise AppError(
+                f"单次最多上传 {settings.MAX_IMAGES_PER_SESSION} 张图片",
+                message_key="upload.batch_max",
+                message_params={"count": settings.MAX_IMAGES_PER_SESSION},
+            )
 
     logger.info(
         "Upload images start | public_id=%s | purpose=%s | count=%s | existing=%s",
@@ -304,11 +321,16 @@ async def upload_images(
     session.status = "uploading"
     await session.save()
     logger.info("Upload images done | public_id=%s | saved=%s", session.public_id, len(saved))
-    return APIResponse(data=await serialize_session(session), message=f"已上传 {len(saved)} 张图片")
+    locale = locale_from_request(request)
+    return APIResponse(
+        data=await serialize_session(session),
+        message=t("upload.done", locale, count=len(saved)),
+    )
 
 
 @router.put("/{public_id}/image-focus-points", response_model=APIResponse)
 async def save_image_focus_points(
+    request: Request,
     payload: ImageFocusPointsIn,
     session: RecognitionSession = Depends(get_recognition_session),
 ) -> APIResponse:
@@ -317,11 +339,16 @@ async def save_image_focus_points(
     by_id = {img.id: img for img in images}
     missing = [i for i in ids if i not in by_id]
     if missing:
-        raise AppError(f"图片不属于当前会话: {missing}", code="invalid_request")
+        raise AppError(
+            f"图片不属于当前会话: {missing}",
+            code="invalid_request",
+            message_key="focus.images_missing",
+            message_params={"missing": missing},
+        )
     for item in payload.items:
         image = by_id[item.image_id]
         if image.purpose not in PART_PURPOSES:
-            raise AppError("仅零件图可设置焦点", code="invalid_request")
+            raise AppError("仅零件图可设置焦点", code="invalid_request", message_key="focus.part_only")
         image.focus_point = {
             "x": float(item.x),
             "y": float(item.y),
@@ -333,7 +360,10 @@ async def save_image_focus_points(
         session.public_id,
         len(payload.items),
     )
-    return APIResponse(data=await serialize_session(session), message="已保存焦点")
+    return APIResponse(
+        data=await serialize_session(session),
+        message=t("focus.saved", locale_from_request(request)),
+    )
 
 
 def _enforce_user_recognition_limit(user_id: int) -> None:
@@ -344,13 +374,16 @@ def _enforce_user_recognition_limit(user_id: int) -> None:
             settings.RATE_LIMIT_PER_MINUTE,
         )
     except RateLimitError:
-        raise RateLimitError("识别过于频繁，请稍后再试")
+        raise RateLimitError("识别过于频繁，请稍后再试", message_key="recognize.rate_limited")
     except Exception:
         logger.warning("Recognition rate limit skipped | user_id=%s", user_id)
 
 
 @router.post("/{public_id}/start", response_model=APIResponse)
-async def start_recognition(session: RecognitionSession = Depends(get_recognition_session)) -> APIResponse:
+async def start_recognition(
+    request: Request,
+    session: RecognitionSession = Depends(get_recognition_session),
+) -> APIResponse:
     if session.app_user_id:
         _enforce_user_recognition_limit(session.app_user_id)
     image_count = await UploadedImage.filter(
@@ -359,7 +392,7 @@ async def start_recognition(session: RecognitionSession = Depends(get_recognitio
         deleted_at=None,
     ).count()
     if image_count == 0:
-        raise AppError("请先上传零件图片")
+        raise AppError("请先上传零件图片", message_key="recognize.need_images")
 
     session.status = "processing"
     session.error_message = None
@@ -377,9 +410,10 @@ async def start_recognition(session: RecognitionSession = Depends(get_recognitio
         session.status,
     )
 
+    locale = locale_from_request(request)
     return APIResponse(
         data=await serialize_session(session),
-        message="识别完成" if session.status == "done" else "识别任务已启动",
+        message=t("recognize.done" if session.status == "done" else "recognize.started", locale),
     )
 
 
@@ -419,6 +453,7 @@ async def confirm_category(
 
 @router.post("/{public_id}/consent", response_model=APIResponse)
 async def set_consent(
+    request: Request,
     payload: ConsentIn,
     session: RecognitionSession = Depends(get_recognition_session),
 ) -> APIResponse:
@@ -435,11 +470,17 @@ async def set_consent(
         resource_id=session.public_id,
         detail={"optimization_consent": payload.optimization_consent},
     )
-    return APIResponse(data=await serialize_session(session), message="授权已更新")
+    return APIResponse(
+        data=await serialize_session(session),
+        message=t("consent.updated", locale_from_request(request)),
+    )
 
 
 @router.post("/{public_id}/consent/revoke", response_model=APIResponse)
-async def revoke_consent(session: RecognitionSession = Depends(get_recognition_session)) -> APIResponse:
+async def revoke_consent(
+    request: Request,
+    session: RecognitionSession = Depends(get_recognition_session),
+) -> APIResponse:
     session.optimization_consent = False
     session.optimization_consent_at = None
     await session.save()
@@ -451,7 +492,10 @@ async def revoke_consent(session: RecognitionSession = Depends(get_recognition_s
         resource_id=session.public_id,
         detail={"optimization_consent": False},
     )
-    return APIResponse(data=await serialize_session(session), message="已撤回优化授权")
+    return APIResponse(
+        data=await serialize_session(session),
+        message=t("consent.revoked", locale_from_request(request)),
+    )
 
 
 @router.post("/{public_id}/vehicle", response_model=APIResponse)
@@ -485,13 +529,16 @@ async def set_vehicle_filter(
 
 
 @router.post("/{public_id}/oe-ocr", response_model=APIResponse)
-async def oe_ocr_from_latest_label(session: RecognitionSession = Depends(get_recognition_session)) -> APIResponse:
+async def oe_ocr_from_latest_label(
+    request: Request,
+    session: RecognitionSession = Depends(get_recognition_session),
+) -> APIResponse:
     await ensure_auto_part(session)
     image = await UploadedImage.filter(
         session_id=session.id, purpose=OE_LABEL_PURPOSE, deleted_at=None
     ).order_by("-id").first()
     if not image:
-        raise AppError("请先上传铭牌/包装图片")
+        raise AppError("请先上传铭牌/包装图片", message_key="oe.need_label")
     logger.info("OE OCR start | public_id=%s | image_id=%s", session.public_id, image.id)
     record = await run_oe_ocr(session.id, image.id)
     logger.info(
@@ -507,7 +554,7 @@ async def oe_ocr_from_latest_label(session: RecognitionSession = Depends(get_rec
             "reason": record.reason,
             "ocr_id": record.id,
         },
-        message="请确认 OE 号后再查询",
+        message=t("oe.confirm_before_query", locale_from_request(request)),
     )
 
 
@@ -539,6 +586,7 @@ async def search_products(session: RecognitionSession = Depends(get_recognition_
 
 @router.post("/{public_id}/feedback", response_model=APIResponse)
 async def submit_feedback(
+    request: Request,
     payload: FeedbackIn,
     session: RecognitionSession = Depends(get_recognition_session),
 ) -> APIResponse:
@@ -559,4 +607,4 @@ async def submit_feedback(
         resource_id=session.public_id,
         detail=payload.model_dump(),
     )
-    return APIResponse(message="感谢反馈")
+    return APIResponse(message=t("feedback.thanks", locale_from_request(request)))

@@ -1,21 +1,21 @@
 <template>
   <section v-if="userImages.length" class="compare-card" :class="{ panel: !embedded, embedded }">
-    <p v-if="!embedded" class="muted">左边是你拍的照片，可用方向键切换。右边按住拖动、滚动滚轮或使用方向键，可旋转匹配产品的 360 图。点击图片可看大图。</p>
+    <p v-if="!embedded" class="muted">{{ t('compare.hint') }}</p>
     <div class="compare">
       <div class="shot">
         <div
           class="frame"
           tabindex="0"
           role="group"
-          aria-label="上传照片"
+          :aria-label="t('compare.userAria')"
           @keydown="onUserKey"
           @click="preview(userSrc)"
         >
-          <img v-if="userSrc" :src="userSrc" alt="你的照片" />
+          <img v-if="userSrc" :src="userSrc" :alt="t('compare.userAlt')" />
           <div v-else class="empty">{{ userPlaceholder }}</div>
           <template v-if="userImages.length > 1">
-            <button type="button" class="nav prev" aria-label="上一张照片" @click.stop="stepUser(-1)">‹</button>
-            <button type="button" class="nav next" aria-label="下一张照片" @click.stop="stepUser(1)">›</button>
+            <button type="button" class="nav prev" :aria-label="t('compare.prev')" @click.stop="stepUser(-1)">‹</button>
+            <button type="button" class="nav next" :aria-label="t('compare.next')" @click.stop="stepUser(1)">›</button>
           </template>
         </div>
       </div>
@@ -25,7 +25,7 @@
           class="frame spin"
           tabindex="0"
           role="slider"
-          aria-label="360 图，左右方向键、滚轮或拖动旋转"
+          :aria-label="t('compare.spinAria')"
           :aria-valuemin="views.length ? 1 : 0"
           :aria-valuemax="views.length"
           :aria-valuenow="views.length ? galleryIndex + 1 : 0"
@@ -38,9 +38,9 @@
           @keydown="onSpinKey"
           @click="preview(galleryShown)"
         >
-          <img v-if="galleryShown" :src="galleryShown" alt="360 图库" draggable="false" />
+          <img v-if="galleryShown" :src="galleryShown" :alt="t('compare.galleryAlt')" draggable="false" />
           <div v-else class="empty">{{ galleryPlaceholder }}</div>
-          <p v-if="views.length > 1" class="spin-hint">拖动、滚轮或方向键旋转</p>
+          <p v-if="views.length > 1" class="spin-hint">{{ t('compare.spinHint') }}</p>
         </div>
         <p class="caption">{{ galleryCaption }}</p>
       </div>
@@ -52,6 +52,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import api from '@/api/client'
 import ImageLightbox from '@/components/ImageLightbox.vue'
 
@@ -62,6 +63,7 @@ const props = defineProps({
   embedded: { type: Boolean, default: false },
 })
 
+const { t } = useI18n()
 const resolved = reactive({})
 const failed = reactive({})
 const objectUrls = []
@@ -90,15 +92,17 @@ const currentUser = computed(() => userImages.value[userIndex.value] || null)
 const currentView = computed(() => views.value[galleryIndex.value] || null)
 const userSrc = computed(() => srcOf(currentUser.value?.preview_url))
 const gallerySrc = computed(() => srcOf(currentView.value?.url))
-const userPlaceholder = computed(() => placeholder(currentUser.value?.preview_url, '无原图'))
+const userPlaceholder = computed(() => placeholder(currentUser.value?.preview_url, t('gallery.noOriginal')))
 const galleryPlaceholder = computed(() => {
-  if (!props.sku) return '暂无匹配产品'
-  if (!views.value.length) return '暂无 360 图'
-  return placeholder(currentView.value?.url, '暂无 360 图')
+  if (!props.sku) return t('compare.noProduct')
+  if (!views.value.length) return t('compare.no360')
+  return placeholder(currentView.value?.url, t('compare.no360'))
 })
-const userCaption = computed(() => `你的照片 ${userIndex.value + 1} / ${Math.max(userImages.value.length, 1)}`)
+const userCaption = computed(() =>
+  t('compare.userCaption', { n: userIndex.value + 1, total: Math.max(userImages.value.length, 1) }),
+)
 const galleryCaption = computed(() => {
-  if (!views.value.length) return '暂无 360 图'
+  if (!views.value.length) return t('compare.no360')
   return `${galleryIndex.value + 1} / ${views.value.length}`
 })
 
@@ -112,8 +116,8 @@ function srcOf(url) {
 
 function placeholder(url, emptyText) {
   if (!url) return emptyText
-  if (failed[url]) return '图片加载失败'
-  return '加载中'
+  if (failed[url]) return t('common.imageLoadFailed')
+  return t('common.loading')
 }
 
 async function loadUrl(url, token = null) {

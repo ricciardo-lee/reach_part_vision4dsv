@@ -1,29 +1,29 @@
 <template>
   <el-form class="filter-form" label-position="top" @submit.prevent>
     <div class="section-head">
-      <h3>车型（可选）</h3>
-      <button type="button" class="link-button" :disabled="!vehicleFilled" @click="clearVehicle">清空</button>
+      <h3>{{ t('vehicle.title') }}</h3>
+      <button type="button" class="link-button" :disabled="!vehicleFilled" @click="clearVehicle">{{ t('common.clear') }}</button>
     </div>
     <p v-if="catalogError" class="muted">{{ catalogError }}</p>
     <div class="vehicle-grid">
-      <el-form-item label="品牌">
+      <el-form-item :label="t('vehicle.brand')">
         <el-select
           v-model="brandValue"
           filterable
           clearable
-          placeholder="搜索或选择品牌"
+          :placeholder="t('vehicle.brandPlaceholder')"
           :loading="brandLoading"
           @change="onBrandChange"
         >
           <el-option v-for="item in brandOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
-      <el-form-item label="车系">
+      <el-form-item :label="t('vehicle.series')">
         <el-select
           v-model="seriesValue"
           filterable
           clearable
-          placeholder="搜索或选择车系"
+          :placeholder="t('vehicle.seriesPlaceholder')"
           :disabled="!brandValue"
           :loading="seriesLoading"
           @change="onSeriesChange"
@@ -31,12 +31,12 @@
           <el-option v-for="item in seriesOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
-      <el-form-item label="车型">
+      <el-form-item :label="t('vehicle.model')">
         <el-select
           v-model="modelValue"
           filterable
           clearable
-          placeholder="搜索或选择车型"
+          :placeholder="t('vehicle.modelPlaceholder')"
           :disabled="!seriesValue"
           :loading="modelLoading"
           @change="onModelChange"
@@ -44,12 +44,12 @@
           <el-option v-for="item in modelOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
-      <el-form-item label="年款">
+      <el-form-item :label="t('vehicle.year')">
         <el-select
           v-model="yearValue"
           filterable
           clearable
-          placeholder="选择年款"
+          :placeholder="t('vehicle.yearPlaceholder')"
           :disabled="!modelValue"
           :loading="yearLoading"
         >
@@ -59,22 +59,22 @@
     </div>
 
     <div class="section-head oe-head">
-      <h3>OE 号（可选）</h3>
-      <button type="button" class="link-button" :disabled="!oeFilled" @click="clearOe">清空</button>
+      <h3>{{ t('oe.title') }}</h3>
+      <button type="button" class="link-button" :disabled="!oeFilled" @click="clearOe">{{ t('common.clear') }}</button>
     </div>
     <div class="oe-toolbar">
       <el-input
         id="oe-number"
         v-model="oeNumber"
         clearable
-        placeholder="可手工输入 OE 号"
-        aria-label="OE"
+        :placeholder="t('oe.placeholder')"
+        :aria-label="t('oe.label')"
         @input="onOeEdit"
       />
       <input ref="oeInput" class="sr-only" type="file" accept="image/*" @change="onOePick" />
-      <el-button @click="oeInput?.click()">选择铭牌图</el-button>
-      <el-button :loading="ocrLoading" @click="runOeOcr">识别铭牌 OE</el-button>
-      <el-tag v-if="store.oeConfirmed" type="success">已确认 OE</el-tag>
+      <el-button @click="oeInput?.click()">{{ t('oe.pickPlate') }}</el-button>
+      <el-button :loading="ocrLoading" @click="runOeOcr">{{ t('oe.recognize') }}</el-button>
+      <el-tag v-if="store.oeConfirmed" type="success">{{ t('oe.confirmed') }}</el-tag>
     </div>
     <div
       class="oe-drop"
@@ -84,14 +84,14 @@
       @dragleave.prevent="onOeDragLeave"
       @drop.prevent="onOeDrop"
     >
-      <span class="muted">铭牌或包装图片可拖到此处</span>
-      <img v-if="oePreview" :src="oePreview" alt="铭牌预览" />
+      <span class="muted">{{ t('oe.dropHint') }}</span>
+      <img v-if="oePreview" :src="oePreview" :alt="t('oe.previewAlt')" />
     </div>
     <p v-if="store.oeOcrMeta" class="muted ocr-meta">
-      OCR 置信度 {{ Math.round((store.oeOcrMeta.confidence || 0) * 100) }}%
+      {{ t('oe.confidence', { pct: Math.round((store.oeOcrMeta.confidence || 0) * 100) }) }}
       <span v-if="store.oeOcrMeta.reason"> · {{ store.oeOcrMeta.reason }}</span>
     </p>
-    <div v-if="store.oeCandidates.length" class="candidates" role="list" aria-label="铭牌 OE 候选">
+    <div v-if="store.oeCandidates.length" class="candidates" role="list" :aria-label="t('oe.candidatesAria')">
       <button
         v-for="oe in store.oeCandidates"
         :key="oe"
@@ -104,12 +104,12 @@
         {{ oe }}
       </button>
       <el-button type="success" :disabled="!oeNumber.trim()" :loading="confirmOeLoading" @click="confirmOe">
-        确认 OE
+        {{ t('oe.confirm') }}
       </el-button>
     </div>
     <el-collapse v-if="store.oeCandidates.length" class="oe-note">
-      <el-collapse-item title="铭牌候选怎么用" name="oe">
-        <p class="muted">使用铭牌候选时，请先点确认，再开始识别。</p>
+      <el-collapse-item :title="t('oe.howToUse')" name="oe">
+        <p class="muted">{{ t('oe.confirmHint') }}</p>
       </el-collapse-item>
     </el-collapse>
   </el-form>
@@ -117,11 +117,13 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import api from '@/api/client'
 import { useRecognitionStore } from '@/stores/recognition'
 
 const MAX_BYTES = 10 * 1024 * 1024
+const { t } = useI18n()
 const store = useRecognitionStore()
 const ocrLoading = ref(false)
 const confirmOeLoading = ref(false)
@@ -183,14 +185,14 @@ function pickOe(oe) {
 
 async function confirmOe() {
   if (!oeNumber.value.trim()) {
-    ElMessage.warning('请先选择或填写 OE')
+    ElMessage.warning(t('oe.needOe'))
     return
   }
   confirmOeLoading.value = true
   try {
     await store.confirmOe(oeNumber.value.trim())
     usedOcrCandidate.value = true
-    ElMessage.success('OE 已确认')
+    ElMessage.success(t('oe.oeConfirmedToast'))
   } catch {
     // The API client already shows the error.
   } finally {
@@ -205,11 +207,11 @@ async function ensureSession() {
 function replaceOeFile(file) {
   if (!file) return
   if (file.type && !file.type.startsWith('image/')) {
-    ElMessage.warning('请上传铭牌或包装图片')
+    ElMessage.warning(t('oe.needPlateImage'))
     return
   }
   if (file.size > MAX_BYTES) {
-    ElMessage.warning('单张图片不能超过 10MB')
+    ElMessage.warning(t('home.maxSize'))
     return
   }
   if (oePreview.value) URL.revokeObjectURL(oePreview.value)
@@ -241,7 +243,7 @@ function onOeDrop(event) {
 
 async function runOeOcr() {
   if (!oeFileObj.value) {
-    ElMessage.warning('请先选择铭牌或包装图片')
+    ElMessage.warning(t('oe.needPlateFirst'))
     return
   }
   ocrLoading.value = true
@@ -267,7 +269,7 @@ async function loadBrands() {
     brandOptions.value = indexedItems(res.data)
     catalogError.value = ''
   } catch {
-    catalogError.value = '车型目录暂不可用'
+    catalogError.value = t('vehicle.catalogUnavailable')
   } finally {
     brandLoading.value = false
   }
@@ -365,7 +367,7 @@ function currentPayload() {
 function validateOe() {
   const oe = oeNumber.value.trim()
   if (store.oeCandidates.length && oe && usedOcrCandidate.value && !store.oeConfirmed) {
-    ElMessage.warning('请先确认铭牌 OE')
+    ElMessage.warning(t('oe.needConfirm'))
     return false
   }
   return true

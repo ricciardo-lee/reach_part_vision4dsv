@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { showToast } from 'vant'
+import { getLocale, t } from '@/i18n'
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || '',
@@ -17,6 +18,7 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  config.headers['Accept-Language'] = getLocale()
   return config
 })
 
@@ -24,7 +26,7 @@ api.interceptors.response.use(
   (response) => {
     const body = response.data
     if (body && body.success === false) {
-      showToast(body.message || '请求失败')
+      showToast(body.message || t('errors.requestFailed'))
       return Promise.reject(body)
     }
     return body
@@ -33,7 +35,7 @@ api.interceptors.response.use(
     const status = error?.response?.status
     const data = error?.response?.data
     const url = error?.config?.url || ''
-    let message = data?.message || error.message || '网络异常'
+    let message = data?.message || error.message || t('errors.network')
     if (status === 401 && !url.includes('/auth/login')) {
       clearAppAuth()
       if (!location.pathname.endsWith('/login')) {
@@ -41,12 +43,10 @@ api.interceptors.response.use(
       }
     }
     if (status === 502 || status === 503 || error.code === 'ERR_NETWORK') {
-      message =
-        data?.message ||
-        '后端服务不可用，请先执行 ./scripts/start_dev.sh 启动 API 与 Celery'
+      message = data?.message || t('errors.backendDown')
     }
     if (data?.details) {
-      message = `${message}（${data.details}）`
+      message = `${message}${t('common.detailsSuffix', { details: data.details })}`
     }
     showToast({ message, position: 'top', duration: 3500 })
     return Promise.reject(error)

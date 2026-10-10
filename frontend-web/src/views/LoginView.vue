@@ -1,26 +1,26 @@
 <template>
   <div class="login-page">
     <section class="panel login-card">
-      <h1>零件识图找货</h1>
-      <p class="muted">请使用管理员分配的账号登录</p>
+      <h1>{{ t('common.appName') }}</h1>
+      <p class="muted">{{ t('login.subtitle') }}</p>
       <form @submit.prevent="submit">
-        <label for="username">用户名</label>
+        <label for="username">{{ t('login.username') }}</label>
         <el-input
           id="username"
           v-model="username"
           autocomplete="username"
-          placeholder="请输入用户名"
+          :placeholder="t('login.usernamePlaceholder')"
         />
-        <label for="password">密码</label>
+        <label for="password">{{ t('login.password') }}</label>
         <el-input
           id="password"
           v-model="password"
           type="password"
           show-password
           autocomplete="current-password"
-          placeholder="请输入密码"
+          :placeholder="t('login.passwordPlaceholder')"
         />
-        <el-button type="primary" native-type="submit" :loading="loading">登录</el-button>
+        <el-button type="primary" native-type="submit" :loading="loading">{{ t('login.submit') }}</el-button>
       </form>
     </section>
   </div>
@@ -29,9 +29,11 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import api from '@/api/client'
 
+const { t } = useI18n()
 const router = useRouter()
 const username = ref('')
 const password = ref('')
@@ -40,7 +42,7 @@ const loading = ref(false)
 async function submit() {
   if (loading.value) return
   if (!username.value.trim() || !password.value) {
-    ElMessage.warning('请输入用户名和密码')
+    ElMessage.warning(t('login.needCredentials'))
     return
   }
   loading.value = true

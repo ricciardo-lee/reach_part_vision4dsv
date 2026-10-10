@@ -4,10 +4,10 @@
       <el-card class="pane photo-pane" shadow="never">
         <template #header>
           <div class="card-head">
-            <span>零件照片</span>
+            <span>{{ t('home.partPhotos') }}</span>
             <div class="card-actions">
-              <span class="count">已选 {{ files.length }} / 8 张</span>
-              <button type="button" class="link-button" :disabled="!files.length" @click="clearFiles">清空</button>
+              <span class="count">{{ t('home.selectedCount', { count: files.length }) }}</span>
+              <button type="button" class="link-button" :disabled="!files.length" @click="clearFiles">{{ t('common.clear') }}</button>
             </div>
           </div>
         </template>
@@ -23,8 +23,8 @@
             @dragleave.prevent="onDragLeave"
             @drop.prevent="onDrop"
           >
-            <strong>继续添加图片</strong>
-            <span>拖拽、点击或粘贴，最多 8 张</span>
+            <strong>{{ t('home.addMore') }}</strong>
+            <span>{{ t('home.addMoreHint') }}</span>
           </button>
 
           <div
@@ -40,16 +40,16 @@
               type="button"
               class="dropzone"
               tabindex="0"
-              aria-label="上传零件照片，可拖拽、粘贴或按 Enter 选择文件"
+              :aria-label="t('home.uploadAria')"
               @click="openPicker"
               @keydown.enter.prevent="openPicker"
               @keydown.space.prevent="openPicker"
             >
-              <strong>把图片拖到这里</strong>
-              <span>点击选择，或在页面中直接粘贴。同一产品 1–8 张。</span>
+              <strong>{{ t('home.dropTitle') }}</strong>
+              <span>{{ t('home.dropHint') }}</span>
             </button>
             <div v-else-if="currentFile" class="stage">
-              <img :src="currentFile.url" :alt="currentFile.name || '当前零件照片'" />
+              <img :src="currentFile.url" :alt="currentFile.name || t('home.currentPhotoAlt')" />
             </div>
             <QueryImageGallery
               v-else
@@ -60,7 +60,7 @@
             />
           </div>
 
-          <ul v-if="files.length" class="filmstrip" aria-label="已选图片">
+          <ul v-if="files.length" class="filmstrip" :aria-label="t('home.selectedAria')">
             <li v-for="(item, index) in files" :key="item.id">
               <button
                 type="button"
@@ -69,14 +69,14 @@
                 :aria-pressed="index === selectedIndex"
                 @click="selectedIndex = index"
               >
-                <img :src="item.url" :alt="item.name || `零件照片 ${index + 1}`" />
+                <img :src="item.url" :alt="item.name || t('home.photoAlt', { n: index + 1 })" />
               </button>
-              <button type="button" class="remove" @click="removeFile(item.id)">移除</button>
+              <button type="button" class="remove" @click="removeFile(item.id)">{{ t('home.remove') }}</button>
             </li>
           </ul>
 
           <p v-if="canAdjustExisting" class="hint">
-            已有识别结果。修改车型或 OE 后可重新匹配；上传新照片会开始一次新的识别。
+            {{ t('home.existingHint') }}
           </p>
         </div>
         <input
@@ -85,20 +85,20 @@
           type="file"
           accept="image/*"
           multiple
-          aria-label="选择零件照片"
+          :aria-label="t('home.selectAria')"
           @change="onPick"
         />
       </el-card>
 
       <el-card class="pane form-pane" shadow="never">
-        <template #header>车型与 OE</template>
+        <template #header>{{ t('home.vehicleOeHeader') }}</template>
         <VehicleOeForm ref="filterForm" />
       </el-card>
     </div>
 
     <div class="workbench-footer">
       <el-checkbox v-model="optimizationConsent">
-        我同意将图片用于识别优化（可选，原图默认 30 天清理）
+        {{ t('home.consent') }}
       </el-checkbox>
       <p v-if="statusHint" class="status" role="status">{{ statusHint }}</p>
       <el-alert
@@ -112,7 +112,7 @@
         tabindex="-1"
       />
       <div class="actions">
-        <el-button v-if="canRetry" :disabled="loading" @click="start">重新识别</el-button>
+        <el-button v-if="canRetry" :disabled="loading" @click="start">{{ t('home.retry') }}</el-button>
         <el-button type="primary" :loading="loading" :disabled="loading" @click="start">
           {{ actionLabel }}
         </el-button>
@@ -124,7 +124,9 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
+import { knownErrorKey, progressKey } from '@shared/locales/index.js'
 import { useRecognitionStore } from '@/stores/recognition'
 import QueryImageGallery from '@/components/QueryImageGallery.vue'
 import VehicleOeForm from '@/components/VehicleOeForm.vue'
@@ -132,6 +134,7 @@ import VehicleOeForm from '@/components/VehicleOeForm.vue'
 const MAX_BYTES = 10 * 1024 * 1024
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$/i
 
+const { t } = useI18n()
 const router = useRouter()
 const store = useRecognitionStore()
 const loading = ref(false)
@@ -150,7 +153,7 @@ const partImages = computed(() => (store.session?.images || []).filter((image) =
 const canAdjustExisting = computed(
   () => store.session?.status === 'done' && partImages.value.length > 0 && files.value.length === 0,
 )
-const actionLabel = computed(() => (canAdjustExisting.value ? '按车型/OE 重新匹配' : '开始识别'))
+const actionLabel = computed(() => (canAdjustExisting.value ? t('home.rematch') : t('home.start')))
 const statusHint = computed(() => progressMessage.value || '')
 const canRetry = computed(() => Boolean(errorMessage.value))
 
@@ -160,6 +163,13 @@ watch(
     if (selectedIndex.value >= length) selectedIndex.value = Math.max(0, length - 1)
   },
 )
+
+function localizeMessage(message, fallbackKey) {
+  const text = String(message || '').trim()
+  if (!text) return t(fallbackKey)
+  const key = knownErrorKey(text)
+  return key ? t(key) : text
+}
 
 function isImage(file) {
   return file.type?.startsWith('image/') || IMAGE_EXT.test(file.name || '')
@@ -187,9 +197,9 @@ function addFiles(incoming) {
   })
   if (taken.length) selectedIndex.value = files.value.length - 1
   const messages = []
-  if (rejectedType.length) messages.push('只能上传图片')
-  if (rejectedSize.length) messages.push('单张图片不能超过 10MB')
-  if (overflow) messages.push('最多上传 8 张图片')
+  if (rejectedType.length) messages.push(t('home.onlyImages'))
+  if (rejectedSize.length) messages.push(t('home.maxSize'))
+  if (overflow) messages.push(t('home.maxCount'))
   if (messages.length) ElMessage.warning(messages.join('，'))
 }
 
@@ -249,11 +259,11 @@ function isApiError(err) {
 
 async function routeAfterRecognition() {
   if (store.session?.status === 'failed') {
-    await fail(store.session.error_message || '识别失败，请稍后重试', true)
+    await fail(localizeMessage(store.session.error_message, 'home.failed'), true)
     return
   }
   if (store.session?.status !== 'done') {
-    await fail('识别超时，请重试', true)
+    await fail(t('home.timeout'), true)
     return
   }
   if (store.session?.is_auto_part === false) {
@@ -274,11 +284,11 @@ async function start() {
   progressMessage.value = ''
   const selected = collectFiles()
   if (!selected.length && !partImages.value.length) {
-    ElMessage.warning('请至少上传一张零件照片')
+    ElMessage.warning(t('home.needOnePhoto'))
     return
   }
   if (selected.length > 8) {
-    ElMessage.warning('最多上传 8 张图片')
+    ElMessage.warning(t('home.maxCount'))
     return
   }
   if (!filterForm.value?.validateOe()) return
@@ -308,19 +318,20 @@ async function start() {
     const reusable = ['created', 'uploading'].includes(store.session?.status)
     if (!reusable) await store.createSession()
     if (selected.length) {
-      progressMessage.value = '图片上传中…'
+      progressMessage.value = t('home.uploading')
       await store.uploadImages(selected, 'part', 0)
     }
     if (optimizationConsent.value) await store.setConsent(true)
     const saved = await filterForm.value.submit()
     if (!saved) return
-    progressMessage.value = '已提交识别，优先匹配图库…'
+    progressMessage.value = t('home.submitted')
     await store.startRecognize((session) => {
-      progressMessage.value = session?.progress_hint || '识别中…'
+      progressMessage.value = t(progressKey(session) || 'home.recognizing')
     })
     await routeAfterRecognition()
   } catch (err) {
-    await fail(err?.message || err?.response?.data?.message || '识别请求失败，请确认后端已启动', !isApiError(err))
+    const raw = err?.message || err?.response?.data?.message
+    await fail(localizeMessage(raw, 'home.requestFailed'), !isApiError(err))
   } finally {
     loading.value = false
   }

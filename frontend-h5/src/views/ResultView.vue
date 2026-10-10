@@ -2,43 +2,43 @@
   <div class="page">
     <section class="card">
       <van-steps :active="1" active-color="#2563eb">
-        <van-step>上传找货</van-step>
-        <van-step>确认品类</van-step>
-        <van-step>查看产品</van-step>
+        <van-step>{{ t('steps.upload') }}</van-step>
+        <van-step>{{ t('steps.confirm') }}</van-step>
+        <van-step>{{ t('steps.products') }}</van-step>
       </van-steps>
     </section>
 
     <QueryImageGallery :images="store.session?.images || []" />
 
     <section class="card">
-      <h2 class="title-row"><span class="emoji" aria-hidden="true">🤖</span> 识别结果</h2>
+      <h2 class="title-row"><span class="emoji" aria-hidden="true">🤖</span> {{ t('result.title') }}</h2>
       <p v-if="store.session?.recognition_mode === 'vision_fallback'" class="muted" style="margin-bottom: 8px">
-        图库未直接命中产品，已改用品类识别；请确认品类后查询公司产品。
+        {{ t('result.visionFallbackHint') }}
       </p>
       <template v-if="isAutoPart">
         <p v-if="result">
-          最可能品类：<strong>{{ result.mapped_category_name || result.part_name }}</strong>
-          （置信度 {{ Math.round((result.confidence || 0) * 100) }}%）
+          {{ t('result.topCategoryValue') }}<strong>{{ displayCategory(result.mapped_category_name || result.part_name) }}</strong>
+          {{ t('result.confidenceValue', { pct: Math.round((result.confidence || 0) * 100) }) }}
         </p>
-        <p class="muted">{{ result?.reason || '暂无判断依据' }}</p>
-        <van-tag v-if="confidenceLevel === 'high'" type="success">✅ 高置信度</van-tag>
-        <van-tag v-else-if="confidenceLevel === 'mid'" type="warning">⚠️ 请确认候选</van-tag>
-        <van-tag v-else type="danger">🆘 建议补拍或手动选择</van-tag>
+        <p class="muted">{{ result?.reason || t('result.noReason') }}</p>
+        <van-tag v-if="confidenceLevel === 'high'" type="success">{{ t('confidence.highEmoji') }}</van-tag>
+        <van-tag v-else-if="confidenceLevel === 'mid'" type="warning">{{ t('confidence.midEmoji') }}</van-tag>
+        <van-tag v-else type="danger">{{ t('confidence.lowEmoji') }}</van-tag>
       </template>
       <template v-else>
         <p class="title-row" style="color: #b91c1c; margin-bottom: 8px">
-          <span class="emoji" aria-hidden="true">🚫</span> 未识别到汽配零件
+          <span class="emoji" aria-hidden="true">🚫</span> {{ t('result.notAutoPart') }}
         </p>
         <p v-if="result">
-          识别为：<strong>{{ result.part_name || '非汽配内容' }}</strong>
+          {{ t('result.recognizedAs') }}：<strong>{{ result.part_name || t('result.nonAutoContent') }}</strong>
         </p>
         <p class="muted">{{ rejectReason }}</p>
-        <p class="muted">请拍摄汽车零配件实物照片（如散热器、冷凝器等），当前流程已终止。</p>
+        <p class="muted">{{ t('result.retakeHint') }}</p>
       </template>
     </section>
 
     <section v-if="isAutoPart" class="card">
-      <h3 class="title-row"><span class="emoji" aria-hidden="true">🧩</span> 候选品类 Top3</h3>
+      <h3 class="title-row"><span class="emoji" aria-hidden="true">🧩</span> {{ t('result.candidates') }}</h3>
       <div
         v-for="(item, index) in candidates"
         :key="index"
@@ -47,17 +47,21 @@
         @click="selectCandidate(item)"
       >
         <div>
-          <div>{{ item.category_name || item.name }}</div>
-          <div class="muted">原始名：{{ item.name }}</div>
+          <div>{{ displayCategory(item.category_name || item.name) }}</div>
+          <div class="muted">{{ t('result.originalName', { name: item.name }) }}</div>
         </div>
         <strong>{{ Math.round((item.confidence || 0) * 100) }}%</strong>
       </div>
-      <van-field v-model="manualName" label="✏️ 手动填写" placeholder="若候选不准可手输品类" />
+      <van-field
+        v-model="manualName"
+        :label="t('result.manualEmoji')"
+        :placeholder="t('result.manualPlaceholder')"
+      />
     </section>
 
     <section v-if="isAutoPart" class="card">
       <van-checkbox v-model="optimizationConsent" shape="square" @change="onConsentChange">
-        ✅ 同意用于识别优化（可选）
+        {{ t('result.consentEmoji') }}
       </van-checkbox>
       <van-button
         v-if="store.session?.optimization_consent"
@@ -67,16 +71,16 @@
         style="margin-top: 8px"
         @click="revokeConsent"
       >
-        撤回授权
+        {{ t('result.revoke') }}
       </van-button>
     </section>
 
     <div class="bottom-bar">
       <van-button v-if="isAutoPart" type="primary" block round :loading="loading" @click="next">
-        🔎 查询产品
+        {{ t('result.queryProductsEmoji') }}
       </van-button>
       <van-button v-else type="primary" block round @click="retake">
-        📷 重新拍摄零件
+        {{ t('result.retakeEmoji') }}
       </van-button>
     </div>
   </div>
@@ -84,11 +88,14 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
+import { categoryLabelKey, knownErrorKey } from '@shared/locales/index.js'
 import { useRecognitionStore } from '@/stores/recognition'
 import QueryImageGallery from '@/components/QueryImageGallery.vue'
 
+const { t } = useI18n()
 const router = useRouter()
 const store = useRecognitionStore()
 const loading = ref(false)
@@ -103,9 +110,11 @@ const isAutoPart = computed(() => {
   if (store.session?.result?.is_auto_part === false) return false
   return true
 })
-const rejectReason = computed(
-  () => store.session?.error_message || result.value?.reason || '图片内容不是汽配零件',
-)
+const rejectReason = computed(() => {
+  const msg = store.session?.error_message || result.value?.reason || t('result.notAutoPartReason')
+  const key = knownErrorKey(msg)
+  return key ? t(key) : msg
+})
 const candidates = computed(() => result.value?.candidates || [])
 const confidenceLevel = computed(() => {
   const confidence = result.value?.confidence || 0
@@ -113,6 +122,11 @@ const confidenceLevel = computed(() => {
   if (confidence >= 0.5) return 'mid'
   return 'low'
 })
+
+function displayCategory(idOrName) {
+  const key = categoryLabelKey(idOrName)
+  return key ? t(key) : idOrName || ''
+}
 
 function selectCandidate(item) {
   selectedCode.value = item.category_code || ''
@@ -124,25 +138,27 @@ async function onConsentChange(val) {
   try {
     await store.setConsent(val)
   } catch (err) {
-    showToast(err?.message || '授权更新失败')
+    const msg = err?.message || t('result.consentFailed')
+    const key = knownErrorKey(msg)
+    showToast(key ? t(key) : msg)
   }
 }
 
 async function revokeConsent() {
   await store.revokeConsent()
   optimizationConsent.value = false
-  showToast('已撤回授权')
+  showToast(t('result.revoked'))
 }
 
 async function next() {
   if (!isAutoPart.value) {
-    showToast('未识别到汽配零件，请重新拍摄')
+    showToast(t('result.notAutoPartToast'))
     return
   }
   const name = manualName.value || selectedName.value
   const oeNumber = store.session?.oe_number || ''
   if (!name && !oeNumber) {
-    showToast('请确认品类，或返回上一步填写 OE')
+    showToast(t('result.needCategory'))
     return
   }
   loading.value = true
@@ -159,7 +175,9 @@ async function next() {
     await store.searchProducts()
     router.push('/products')
   } catch (err) {
-    showToast(err?.message || err?.response?.data?.message || '查询失败')
+    const msg = err?.message || err?.response?.data?.message || t('result.queryFailed')
+    const key = knownErrorKey(msg)
+    showToast(key ? t(key) : msg)
   } finally {
     loading.value = false
   }

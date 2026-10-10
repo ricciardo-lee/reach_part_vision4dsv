@@ -18,10 +18,10 @@ async def get_device_session(
     x_device_token: Optional[str] = Header(default=None, alias="X-Device-Token"),
 ) -> DeviceSession:
     if not x_device_token:
-        raise UnauthorizedError("缺少设备会话 Token")
+        raise UnauthorizedError("缺少设备会话 Token", message_key="auth.missing_device_token")
     session = await DeviceSession.get_or_none(session_token=x_device_token, is_active=True)
     if not session or session.expires_at < datetime.utcnow():
-        raise UnauthorizedError("设备会话无效或已过期")
+        raise UnauthorizedError("设备会话无效或已过期", message_key="auth.device_expired")
     request.state.device_session = session
     return session
 
@@ -31,20 +31,20 @@ async def get_current_app_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> AppUser:
     if not credentials:
-        raise UnauthorizedError("请先登录")
+        raise UnauthorizedError("请先登录", message_key="auth.login_required")
     try:
         payload = decode_token(credentials.credentials)
     except ValueError as exc:
-        raise UnauthorizedError("Token 无效") from exc
+        raise UnauthorizedError("Token 无效", message_key="auth.token_invalid") from exc
     if payload.get("type") != "access" or payload.get("actor") != ACTOR_APP_USER:
-        raise UnauthorizedError("Token 类型错误")
+        raise UnauthorizedError("Token 类型错误", message_key="auth.token_type")
     try:
         user_id = int(payload["sub"])
     except (TypeError, ValueError) as exc:
-        raise UnauthorizedError("Token 无效") from exc
+        raise UnauthorizedError("Token 无效", message_key="auth.token_invalid") from exc
     user = await AppUser.get_or_none(id=user_id, is_active=True)
     if not user:
-        raise UnauthorizedError("用户不存在或已禁用")
+        raise UnauthorizedError("用户不存在或已禁用", message_key="auth.user_disabled")
     request.state.app_user = user
     return user
 
@@ -55,9 +55,9 @@ async def get_recognition_session(
 ) -> RecognitionSession:
     session = await RecognitionSession.get_or_none(public_id=public_id)
     if not session:
-        raise NotFoundError("识别会话不存在")
+        raise NotFoundError("识别会话不存在", message_key="session.not_found")
     if session.app_user_id != app_user.id:
-        raise ForbiddenError("无权访问该识别会话")
+        raise ForbiddenError("无权访问该识别会话", message_key="session.forbidden")
     return session
 
 

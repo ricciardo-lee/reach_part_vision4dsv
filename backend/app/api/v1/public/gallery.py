@@ -40,5 +40,5 @@ async def gallery_views(sku: str, _: AppUser = Depends(get_current_app_user)) ->
 async def gallery_file(sku: str, name: str, _: AppUser = Depends(get_current_app_user)) -> FileResponse:
     path = resolve_image(sku, name)
     if path is None:
-        raise NotFoundError("360 图片不存在")
+        raise NotFoundError("360 图片不存在", message_key="gallery.not_found")
     return FileResponse(path, media_type=_MEDIA_TYPES.get(path.suffix.lower(), "image/jpeg"))

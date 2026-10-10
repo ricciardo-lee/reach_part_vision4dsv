@@ -81,4 +81,9 @@ async def ensure_auto_part(session: RecognitionSession) -> None:
     if not await session_is_auto_part(session):
         result = await latest_success_result(session.id)
         reason = (result.reason if result else None) or "图片内容不是汽配零件，请重新拍摄零件照片"
-        raise AppError(reason, code="not_auto_part", status_code=400)
+        raise AppError(
+            reason,
+            code="not_auto_part",
+            status_code=400,
+            message_key=None if (result and result.reason) else "part.not_auto",
+        )
