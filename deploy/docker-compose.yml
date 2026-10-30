@@ -46,6 +46,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    gpus: all
     volumes:
       - models:/data/models
       - indexes:/data/indexes

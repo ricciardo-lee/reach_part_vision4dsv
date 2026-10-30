@@ -75,6 +75,6 @@ docker compose up -d web
 - **上传图片：**在 `uploads` 卷。发版和重建容器都不要删除这个卷。过期图片仍由 beat 触发、worker 执行清理。
 - **MySQL：**表结构在 API 启动时补齐。发版后 `docker compose up -d api` 即可。不要把数据库放进 Compose。产品、OE 和车型三张表也由这次启动建出空表；随后用海豚调度器的写入账号导入数据。应用账号只保留这三张表的 `SELECT` 权限。`price` 保持源数据单位，不要在导入时换算。
 
-## 以后加显卡
+## 显卡
 
-把 `deploy/.env` 里的 `TORCH_INDEX_URL` 改成对应 CUDA 版本的 PyTorch 源，`SEARCH_SEGMENT_DEVICE` 可改为 `cuda`。然后只重建后端镜像并重启 `api`、`worker`、`beat`。`web` 仍不使用显卡。给 worker 增加 GPU 的 Compose 配置需要在装好 NVIDIA Container Toolkit 之后再加。
+`worker` 已设置 `gpus: all`，API、beat 和网页不使用显卡。RTX 5060 Ti 使用 CUDA 12.8：`TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128`，`SEARCH_SEGMENT_DEVICE=cuda`。改这两项后重建后端镜像并重启 `api`、`worker`、`beat`。没有 NVIDIA runtime 的机器要把 `worker` 的 `gpus: all` 去掉，并把 `SEARCH_SEGMENT_DEVICE` 改回 `cpu`。
