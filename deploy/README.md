@@ -1,5 +1,7 @@
 # 线上 Docker 部署
 
+**English (Ubuntu / US server):** see [README.en.md](./README.en.md).
+
 在已安装 Docker 和 Git 的服务器上运行。MySQL 使用公司现有库，不放进容器。Python 和 npm 依赖只在构建镜像时安装，不要进入容器执行 `pip install` 或 `npm install`。
 
 ## 首次启动
