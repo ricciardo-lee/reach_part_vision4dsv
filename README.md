@@ -23,7 +23,7 @@ scripts/           本地辅助脚本
 
 1. **本地开发不用 Docker**。线上部署见 [deploy/README.md](deploy/README.md)；英文 Ubuntu 环境配置见 [deploy/README.en.md](deploy/README.en.md)。
 2. MySQL 必须使用独立库 `reach_part_vision4dsv`，禁止连接 MDM 的 `ReachMDM_LMR`。
-3. DeepSeek API Key、数据库密码等全部放在 `backend/.env`，不要写入源码。
+3. LLM / 数据库密码等全部放在 `backend/.env`，不要写入源码。默认用 **OpenAI**（`DEEPSEEK_*` 变量名兼容，指向 `https://api.openai.com/v1`）；也可改 `BASE_URL`/模型切回 DeepSeek.com（详见 `.env.example`）。
 
 ## 本地准备
 

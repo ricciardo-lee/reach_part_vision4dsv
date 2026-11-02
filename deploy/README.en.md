@@ -140,16 +140,20 @@ LOCAL_STORAGE_DIR=/data/uploads
 
 Uploads live in the Docker volume `uploads`. Do not delete that volume on upgrade.
 
-### 4.5 DeepSeek
+### 4.5 LLM (OpenAI-compatible)
+
+Default is **OpenAI**. Variable names remain `DEEPSEEK_*` for historical compatibility.
 
 ```env
 DEEPSEEK_API_KEY=sk-...
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp
-DEEPSEEK_CHAT_MODEL=deepseek-chat
+DEEPSEEK_BASE_URL=https://api.openai.com/v1
+DEEPSEEK_MODEL=gpt-4o
+DEEPSEEK_CHAT_MODEL=gpt-4o
 ```
 
-Required for vision fallback and WhatsApp chat tools.
+To use DeepSeek.com instead, set `DEEPSEEK_BASE_URL=https://api.deepseek.com` and DeepSeek model ids.
+
+Restart `api`, `worker`, and `worker_whatsapp` after changing keys or models.
 
 ### 4.6 WhatsApp Cloud API (optional but typical for US)
 

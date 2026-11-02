@@ -71,12 +71,13 @@ class Settings(BaseSettings):
     STORAGE_BACKEND: str = "auto"
     LOCAL_STORAGE_DIR: str = "uploads"
 
+    # OpenAI-compatible chat/vision client (OpenAI, DeepSeek, etc.). Names keep DEEPSEEK_* prefix.
     DEEPSEEK_API_KEY: str = ""
-    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-    DEEPSEEK_MODEL: str = "deepseek-v4-flash-vision-exp"
+    DEEPSEEK_BASE_URL: str = "https://api.openai.com/v1"
+    DEEPSEEK_MODEL: str = "gpt-4o"
     DEEPSEEK_TIMEOUT_SECONDS: int = 60
     DEEPSEEK_MAX_RETRIES: int = 2
-    DEEPSEEK_CHAT_MODEL: str = "deepseek-chat"
+    DEEPSEEK_CHAT_MODEL: str = "gpt-4o"
     DEEPSEEK_CHAT_MAX_TOOL_ROUNDS: int = 4
 
     # Meta WhatsApp Cloud API
@@ -101,7 +102,6 @@ class Settings(BaseSettings):
     WHATSAPP_H5_BASE_URL: str = ""
     WHATSAPP_SHARED_APP_USER_USERNAME: str = "Lee"
     WHATSAPP_SHARED_APP_USER_PASSWORD: str = "123456"
-    WHATSAPP_LINK_TOKEN_TTL_HOURS: int = 72
 
     MAX_UPLOAD_MB: int = 10
     MAX_IMAGES_PER_SESSION: int = 8
