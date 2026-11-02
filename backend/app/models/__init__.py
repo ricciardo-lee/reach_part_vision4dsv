@@ -234,56 +234,127 @@ class AuditLog(models.Model, TimestampMixin):
         table = "vision_audit_logs"
 
 
-class ProductBasicInfoUsa(models.Model):
-    """USA product catalog row. DolphinScheduler owns writes; this app only reads."""
+class VisionPartOe(models.Model, TimestampMixin):
+    """App-owned OE / material / category row (Excel-maintained)."""
 
-    material_code = fields.CharField(max_length=64, primary_key=True)
-    # Gallery / retrieval SKU. OE and vehicle links still use material_code.
-    short_num = fields.CharField(max_length=64, null=True, db_index=True)
-    standard_label_cn = fields.CharField(max_length=1024, null=True)
-    standard_label_en = fields.CharField(max_length=1024, null=True)
-    # Source integer preserved as-is. Callers must not rescale the unit.
-    price = fields.BigIntField(default=0)
-
-    class Meta:
-        table = "product_basic_info_usa"
-
-
-class VehicleBasicInfoUsa(models.Model):
-    """USA vehicle catalog row. DolphinScheduler owns writes; this app only reads."""
-
-    reach_car_id = fields.CharField(max_length=64, primary_key=True)
-    brand = fields.CharField(max_length=128, null=True, db_index=True)
-    manufacturer = fields.CharField(max_length=128, null=True)
-    series = fields.CharField(max_length=128, null=True)
-    model = fields.CharField(max_length=128, null=True)
-    model_year = fields.CharField(max_length=32, null=True)
-    year_from = fields.CharField(max_length=16, null=True)
-    year_till = fields.CharField(max_length=16, null=True)
-    intake_from = fields.CharField(max_length=64, null=True)
-    engine_code = fields.CharField(max_length=64, null=True)
-    trans_type = fields.CharField(max_length=64, null=True)
-    displacement = fields.CharField(max_length=64, null=True)
-    fuel_type = fields.CharField(max_length=64, null=True)
-    cylinders = fields.CharField(max_length=32, null=True)
-    displacement_cc = fields.CharField(max_length=32, null=True)
+    id = fields.IntField(primary_key=True)
+    category = fields.CharField(max_length=32, db_index=True)  # COMPRESSOR/CONDENSER/RADIATOR
+    material_code = fields.CharField(max_length=64, db_index=True)  # SKU unique id
+    # Long OE values appear in supplier sheets; Excel may also expand numeric cells.
+    oe = fields.CharField(max_length=512, db_index=True)
+    oe_normalized = fields.CharField(max_length=512, db_index=True)
+    is_active = fields.BooleanField(default=True)
 
     class Meta:
-        table = "vehicle_basic_info_usa"
-        indexes = (
-            ("brand", "series"),
-            ("brand", "series", "model"),
-        )
+        table = "vision_part_oe"
+        unique_together = (("material_code", "oe"),)
 
 
-class ProductOeVehicleUsa(models.Model):
-    """Material, OE number, and vehicle link. DolphinScheduler owns writes."""
+class VisionPartVehicle(models.Model, TimestampMixin):
+    """App-owned material ↔ vehicle fitment (make / model / year)."""
 
-    id = fields.BigIntField(primary_key=True)
+    id = fields.IntField(primary_key=True)
     material_code = fields.CharField(max_length=64, db_index=True)
-    ref_num = fields.CharField(max_length=128, db_index=True)
-    reach_car_id = fields.CharField(max_length=64, db_index=True)
+    make_name = fields.CharField(max_length=128, db_index=True)
+    model_name = fields.CharField(max_length=128, null=True)
+    year = fields.CharField(max_length=16, null=True)
+    is_active = fields.BooleanField(default=True)
 
     class Meta:
-        table = "product_oe_vehicle_usa"
-        unique_together = (("material_code", "ref_num", "reach_car_id"),)
+        table = "vision_part_vehicle"
+        unique_together = (("material_code", "make_name", "model_name", "year"),)
+        indexes = (("make_name", "model_name"),)
+
+
+def _build_radiator_spec_model():
+    """Generate VisionRadiatorSpec with all radiator columns as nullable CharFields."""
+    from app.core.catalog_fields import RADIATOR_SPEC_FIELDS
+
+    attrs: dict = {
+        "id": fields.IntField(primary_key=True),
+        "material_code": fields.CharField(max_length=64, unique=True, db_index=True),
+        "is_active": fields.BooleanField(default=True),
+        "created_at": fields.DatetimeField(auto_now_add=True),
+        "updated_at": fields.DatetimeField(auto_now=True),
+        "Meta": type("Meta", (), {"table": "vision_radiator_spec"}),
+        "__module__": __name__,
+        "__doc__": "App-owned radiator technical parameters (Excel-maintained).",
+    }
+    # TEXT (not VARCHAR) — ~77 tech-spec columns exceed MySQL InnoDB row size
+    # with utf8mb4 VARCHAR(255) (error 1118).
+    for name in RADIATOR_SPEC_FIELDS:
+        attrs[name] = fields.TextField(null=True)
+    return type("VisionRadiatorSpec", (models.Model,), attrs)
+
+
+VisionRadiatorSpec = _build_radiator_spec_model()
+
+
+class CatalogImportLog(models.Model, TimestampMixin):
+    """Excel import audit trail for catalog admin."""
+
+    id = fields.IntField(primary_key=True)
+    kind = fields.CharField(max_length=64, db_index=True)  # oe/vehicles/spec_*
+    filename = fields.CharField(max_length=255, default="")
+    total_rows = fields.IntField(default=0)
+    success_count = fields.IntField(default=0)
+    failure_count = fields.IntField(default=0)
+    errors = fields.JSONField(null=True)
+    operator = fields.CharField(max_length=64, default="")
+
+    class Meta:
+        table = "vision_catalog_import_logs"
+
+
+class WaContact(models.Model, TimestampMixin):
+    """WhatsApp end-user identified by phone number (wa_id)."""
+
+    id = fields.IntField(primary_key=True)
+    wa_id = fields.CharField(max_length=32, unique=True, db_index=True)
+    profile_name = fields.CharField(max_length=128, default="")
+    last_seen_at = fields.DatetimeField(null=True)
+
+    class Meta:
+        table = "wa_contacts"
+
+
+class WaConversation(models.Model, TimestampMixin):
+    """A WhatsApp chat thread that resets after idle timeout."""
+
+    id = fields.IntField(primary_key=True)
+    contact: fields.ForeignKeyRelation[WaContact] = fields.ForeignKeyField(
+        "models.WaContact", related_name="conversations"
+    )
+    status = fields.CharField(max_length=16, default="open", db_index=True)
+    last_message_at = fields.DatetimeField(null=True)
+    message_count = fields.IntField(default=0)
+    llm_tokens = fields.IntField(default=0)
+    welcome_sent_at = fields.DatetimeField(null=True)
+
+    class Meta:
+        table = "wa_conversations"
+
+
+class WaMessage(models.Model, TimestampMixin):
+    """Inbound or outbound WhatsApp message within a conversation."""
+
+    id = fields.IntField(primary_key=True)
+    conversation: fields.ForeignKeyRelation[WaConversation] = fields.ForeignKeyField(
+        "models.WaConversation", related_name="messages"
+    )
+    direction = fields.CharField(max_length=8, db_index=True)  # in | out
+    wa_message_id = fields.CharField(max_length=128, null=True, unique=True, db_index=True)
+    msg_type = fields.CharField(max_length=32, default="text")
+    text = fields.TextField(null=True)
+    raw_payload = fields.JSONField(null=True)
+    tool_calls = fields.JSONField(null=True)
+    delivery_status = fields.CharField(max_length=32, null=True)
+    latency_ms = fields.IntField(null=True)
+    token_usage = fields.JSONField(null=True)
+    error_message = fields.CharField(max_length=512, null=True)
+    recognition_session_id = fields.IntField(null=True, db_index=True)
+    media_id = fields.CharField(max_length=128, null=True)
+    object_key = fields.CharField(max_length=255, null=True)
+
+    class Meta:
+        table = "wa_messages"

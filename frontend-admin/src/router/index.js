@@ -8,6 +8,10 @@ import PromptsView from '@/views/PromptsView.vue'
 import AuditView from '@/views/AuditView.vue'
 import UsersView from '@/views/UsersView.vue'
 import AppUsersView from '@/views/AppUsersView.vue'
+import WhatsappView from '@/views/WhatsappView.vue'
+import CatalogVehiclesView from '@/views/CatalogVehiclesView.vue'
+import CatalogOeView from '@/views/CatalogOeView.vue'
+import CatalogSpecsView from '@/views/CatalogSpecsView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -19,6 +23,10 @@ const router = createRouter({
       children: [
         { path: '', name: 'dashboard', component: DashboardView },
         { path: 'sessions', name: 'sessions', component: SessionsView },
+        { path: 'whatsapp', name: 'whatsapp', component: WhatsappView },
+        { path: 'catalog/oe', name: 'catalog-oe', component: CatalogOeView },
+        { path: 'catalog/vehicles', name: 'catalog-vehicles', component: CatalogVehiclesView },
+        { path: 'catalog/specs', name: 'catalog-specs', component: CatalogSpecsView },
         { path: 'mappings', name: 'mappings', component: MappingsView },
         { path: 'prompts', name: 'prompts', component: PromptsView },
         { path: 'audit', name: 'audit', component: AuditView },

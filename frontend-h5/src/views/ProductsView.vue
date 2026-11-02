@@ -43,11 +43,11 @@
       >
         <div style="display: flex; justify-content: space-between; gap: 8px">
           <strong>{{ item.name }}</strong>
-          <span>💰 {{ item.price != null ? `¥${item.price}` : '-' }}</span>
         </div>
         <div class="muted">{{ t('products.skuLine', { sku: item.sku }) }}</div>
         <div class="muted">{{ t('products.fitment', { value: item.fitment || '-' }) }}</div>
         <div class="muted">{{ t('products.partNumbers', { value: partNumbers(item) }) }}</div>
+        <div v-if="specsSummary(item)" class="muted">{{ t('products.specs') }}: {{ specsSummary(item) }}</div>
         <van-tag plain type="primary">🔎 {{ item.match_reason || t('products.matchResult') }}</van-tag>
       </div>
     </section>
@@ -125,12 +125,20 @@ const matchScore = computed(() => {
 const vehicleText = computed(() => {
   const parts = [
     store.session?.vehicle_brand,
-    store.session?.vehicle_series,
     store.session?.vehicle_model,
     store.session?.vehicle_year,
   ].filter(Boolean)
   return parts.length ? parts.join(' / ') : t('common.notSelected')
 })
+
+function specsSummary(item) {
+  const specs = item?.attributes?.specs
+  if (!specs || typeof specs !== 'object') return ''
+  return Object.entries(specs)
+    .slice(0, 3)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(', ')
+}
 
 async function feedback(correct) {
   await store.sendFeedback(correct)

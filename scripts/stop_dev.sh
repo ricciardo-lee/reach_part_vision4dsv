@@ -11,6 +11,7 @@ stop_bg admin || true
 stop_bg web || true
 stop_bg h5 || true
 stop_bg beat || true
+stop_bg celery_whatsapp || true
 stop_bg celery || true
 stop_bg api || true
 

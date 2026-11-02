@@ -169,6 +169,11 @@ class SimilarityService:
                         continue
                     score = float(hit.score) * weight
                     cid = hit.payload.get("category_id")
+                    # Drop unsupported gallery categories (e.g. fan) at search time.
+                    from app.core.constants import SUPPORTED_CATEGORY_IDS
+
+                    if cid and str(cid).casefold() not in SUPPORTED_CATEGORY_IDS:
+                        continue
                     if category_id and cid == category_id:
                         score += self.category_soft_bonus
                     sku_scores[sku].append((score, hit))

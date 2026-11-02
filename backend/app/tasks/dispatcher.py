@@ -23,6 +23,32 @@ def celery_workers_available() -> bool:
         return False
 
 
+def recognition_worker_available() -> bool:
+    """Return True when a worker is consuming the default recognition queue (`celery`)."""
+    try:
+        from app.tasks.celery_app import celery_app
+
+        inspector = celery_app.control.inspect(timeout=1.0)
+        active_queues = inspector.active_queues() if inspector else None
+        if not active_queues:
+            # Fall back to any worker ping — older setups may not declare queues clearly.
+            return celery_workers_available()
+        for _worker, queues in active_queues.items():
+            for item in queues or []:
+                name = ""
+                if isinstance(item, dict):
+                    name = str(item.get("name") or item.get("routing_key") or "")
+                else:
+                    name = str(item)
+                if name in {"celery", "default"}:
+                    return True
+        logger.info("No recognition queue worker found | active_queues=%s", active_queues)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Recognition worker check failed: %s", exc)
+        return False
+
+
 async def dispatch_vision_recognition(session_id: int, public_id: str) -> str:
     """
     Preferred path: queue recognition to Celery.

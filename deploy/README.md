@@ -17,8 +17,16 @@ docker compose up -d --build
 - 管理端：`http://服务器:8080`
 - 健康检查：`http://服务器/health`
 - 就绪检查：`http://服务器/ready`（应能看到 Celery worker）
+- WhatsApp webhook：由外部网关（如 `pbx-reach.nsvoip.net:5001`）转发到 `api:8000` 的 `/sms/whatsapp/<token>`
 
 容器里的 `127.0.0.1` 不是宿主机。MySQL 在本机时，`.env` 里写 `host.docker.internal`。在别的机器上时，写那台机器的局域网地址。
+
+WhatsApp 使用独立 worker 容器 `worker_whatsapp`（队列 `whatsapp`，默认 concurrency=4）：负责 webhook 编排、媒体下载、多图聚合与 LLM 回复，不占用 GPU。零件照片识别仍投递到 `worker`（队列 `celery`，DINOv2 / DeepSeek Vision）。`.env` 需配置 `WHATSAPP_*`（含 `WHATSAPP_IMAGE_*`）与 `DEEPSEEK_CHAT_MODEL`。只改 WhatsApp 相关代码时：
+
+```bash
+docker compose build api
+docker compose up -d api worker worker_whatsapp beat
+```
 
 第一次启动 worker 时，若模型卷是空的，会用镜像里的 `huggingface_hub` 下载 `facebook/dinov2-base` 和 `ZhengPeng7/BiRefNet`。服务器需要能访问 Hugging Face。下载完成后权重留在 `models` 卷，之后重建容器不会再下。
 

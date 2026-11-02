@@ -16,14 +16,6 @@
         @click="openBrand"
       />
       <van-field
-        v-model="series"
-        is-link
-        readonly
-        :label="t('vehicle.series')"
-        :placeholder="t('common.pleaseSelect')"
-        @click="openSeries"
-      />
-      <van-field
         v-model="model"
         is-link
         readonly
@@ -98,12 +90,6 @@
       @select="onBrandSelect"
     />
     <IndexedOptionSheet
-      v-model:show="showSeries"
-      :title="t('vehicle.selectSeries')"
-      :indexed="seriesIndexed"
-      @select="onSeriesSelect"
-    />
-    <IndexedOptionSheet
       v-model:show="showModel"
       :title="t('vehicle.selectModel')"
       :indexed="modelIndexed"
@@ -125,11 +111,9 @@ const store = useRecognitionStore()
 const ocrLoading = ref(false)
 const confirmOeLoading = ref(false)
 const brand = ref('')
-const series = ref('')
 const model = ref('')
 const year = ref('')
 const brandValue = ref('')
-const seriesValue = ref('')
 const modelValue = ref('')
 const yearValue = ref('')
 const oeNumber = ref('')
@@ -138,17 +122,15 @@ const oeFileObj = ref(null)
 const usedOcrCandidate = ref(false)
 
 const showBrand = ref(false)
-const showSeries = ref(false)
 const showModel = ref(false)
 const showYear = ref(false)
 const brandIndexed = ref({ letters: [], groups: [], items: [] })
-const seriesIndexed = ref({ letters: [], groups: [], items: [] })
 const modelIndexed = ref({ letters: [], groups: [], items: [] })
 const yearColumns = ref([])
 
 const emptyIndexed = () => ({ letters: [], groups: [], items: [] })
 const vehicleFilled = computed(() =>
-  Boolean(brandValue.value || seriesValue.value || modelValue.value || yearValue.value),
+  Boolean(brandValue.value || modelValue.value || yearValue.value),
 )
 const oeFilled = computed(() =>
   Boolean(
@@ -171,8 +153,6 @@ function hydrate() {
   const session = store.session || {}
   brand.value = session.vehicle_brand || ''
   brandValue.value = session.vehicle_brand || ''
-  series.value = session.vehicle_series || ''
-  seriesValue.value = session.vehicle_series || ''
   model.value = session.vehicle_model || ''
   modelValue.value = session.vehicle_model || ''
   yearValue.value = session.vehicle_year || ''
@@ -244,17 +224,10 @@ async function openBrand() {
   showBrand.value = true
 }
 
-async function openSeries() {
-  if (!brandValue.value) return showToast(t('vehicle.needBrand'))
-  const res = await api.get('/api/v1/public/vehicle/series/indexed', { params: { brand: brandValue.value } })
-  seriesIndexed.value = res.data || emptyIndexed()
-  showSeries.value = true
-}
-
 async function openModels() {
-  if (!seriesValue.value) return showToast(t('vehicle.needSeries'))
+  if (!brandValue.value) return showToast(t('vehicle.needBrand'))
   const res = await api.get('/api/v1/public/vehicle/models/indexed', {
-    params: { brand: brandValue.value, series: seriesValue.value },
+    params: { brand: brandValue.value },
   })
   modelIndexed.value = res.data || emptyIndexed()
   showModel.value = true
@@ -263,7 +236,7 @@ async function openModels() {
 async function openYears() {
   if (!modelValue.value) return showToast(t('vehicle.needModel'))
   const res = await api.get('/api/v1/public/vehicle/years', {
-    params: { brand: brandValue.value, series: seriesValue.value, model: modelValue.value },
+    params: { brand: brandValue.value, model: modelValue.value },
   })
   yearColumns.value = (res.data || []).map((item) => ({ text: item.label, value: item.value }))
   showYear.value = true
@@ -272,19 +245,6 @@ async function openYears() {
 function onBrandSelect(item) {
   brand.value = item.label
   brandValue.value = item.value
-  series.value = ''
-  seriesValue.value = ''
-  model.value = ''
-  modelValue.value = ''
-  year.value = ''
-  yearValue.value = ''
-  seriesIndexed.value = emptyIndexed()
-  modelIndexed.value = emptyIndexed()
-}
-
-function onSeriesSelect(item) {
-  series.value = item.label
-  seriesValue.value = item.value
   model.value = ''
   modelValue.value = ''
   year.value = ''
@@ -310,7 +270,6 @@ function currentPayload() {
   const oeSource = !oe ? null : usedOcrCandidate.value || store.oeCandidates.includes(oe) ? 'ocr' : 'manual'
   return {
     brand: brandValue.value || null,
-    series: seriesValue.value || null,
     model: modelValue.value || null,
     year: yearValue.value || null,
     oe_number: oe || null,
@@ -340,13 +299,10 @@ async function submit() {
 function clearVehicle() {
   brand.value = ''
   brandValue.value = ''
-  series.value = ''
-  seriesValue.value = ''
   model.value = ''
   modelValue.value = ''
   year.value = ''
   yearValue.value = ''
-  seriesIndexed.value = emptyIndexed()
   modelIndexed.value = emptyIndexed()
   yearColumns.value = []
 }
@@ -367,7 +323,6 @@ async function clear() {
   if (store.session?.public_id) {
     await store.setVehicle({
       brand: null,
-      series: null,
       model: null,
       year: null,
       oe_number: null,

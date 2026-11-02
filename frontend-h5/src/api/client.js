@@ -39,7 +39,8 @@ api.interceptors.response.use(
     if (status === 401 && !url.includes('/auth/login')) {
       clearAppAuth()
       if (!location.pathname.endsWith('/login')) {
-        location.href = '/login'
+        const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+        location.href = `${base}/login`
       }
     }
     if (status === 502 || status === 503 || error.code === 'ERR_NETWORK') {

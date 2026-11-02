@@ -18,26 +18,13 @@
           <el-option v-for="item in brandOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
-      <el-form-item :label="t('vehicle.series')">
-        <el-select
-          v-model="seriesValue"
-          filterable
-          clearable
-          :placeholder="t('vehicle.seriesPlaceholder')"
-          :disabled="!brandValue"
-          :loading="seriesLoading"
-          @change="onSeriesChange"
-        >
-          <el-option v-for="item in seriesOptions" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
-      </el-form-item>
       <el-form-item :label="t('vehicle.model')">
         <el-select
           v-model="modelValue"
           filterable
           clearable
           :placeholder="t('vehicle.modelPlaceholder')"
-          :disabled="!seriesValue"
+          :disabled="!brandValue"
           :loading="modelLoading"
           @change="onModelChange"
         >
@@ -128,16 +115,13 @@ const store = useRecognitionStore()
 const ocrLoading = ref(false)
 const confirmOeLoading = ref(false)
 const brandLoading = ref(false)
-const seriesLoading = ref(false)
 const modelLoading = ref(false)
 const yearLoading = ref(false)
 const catalogError = ref('')
 const brandValue = ref('')
-const seriesValue = ref('')
 const modelValue = ref('')
 const yearValue = ref('')
 const brandOptions = ref([])
-const seriesOptions = ref([])
 const modelOptions = ref([])
 const yearOptions = ref([])
 const oeNumber = ref('')
@@ -149,7 +133,7 @@ const usedOcrCandidate = ref(false)
 let oeDragDepth = 0
 
 const vehicleFilled = computed(() =>
-  Boolean(brandValue.value || seriesValue.value || modelValue.value || yearValue.value),
+  Boolean(brandValue.value || modelValue.value || yearValue.value),
 )
 const oeFilled = computed(() =>
   Boolean(oeNumber.value.trim() || oeFileObj.value || store.oeCandidates.length || store.oeOcrMeta),
@@ -162,7 +146,6 @@ function indexedItems(data) {
 function hydrate() {
   const session = store.session || {}
   brandValue.value = session.vehicle_brand || ''
-  seriesValue.value = session.vehicle_series || ''
   modelValue.value = session.vehicle_model || ''
   yearValue.value = session.vehicle_year || ''
   oeNumber.value = session.oe_number || ''
@@ -275,23 +258,12 @@ async function loadBrands() {
   }
 }
 
-async function loadSeries() {
-  if (!brandValue.value) return
-  seriesLoading.value = true
-  try {
-    const res = await api.get('/api/v1/public/vehicle/series/indexed', { params: { brand: brandValue.value } })
-    seriesOptions.value = indexedItems(res.data)
-  } finally {
-    seriesLoading.value = false
-  }
-}
-
 async function loadModels() {
-  if (!seriesValue.value) return
+  if (!brandValue.value) return
   modelLoading.value = true
   try {
     const res = await api.get('/api/v1/public/vehicle/models/indexed', {
-      params: { brand: brandValue.value, series: seriesValue.value },
+      params: { brand: brandValue.value },
     })
     modelOptions.value = indexedItems(res.data)
   } finally {
@@ -304,7 +276,7 @@ async function loadYears() {
   yearLoading.value = true
   try {
     const res = await api.get('/api/v1/public/vehicle/years', {
-      params: { brand: brandValue.value, series: seriesValue.value, model: modelValue.value },
+      params: { brand: brandValue.value, model: modelValue.value },
     })
     yearOptions.value = res.data || []
   } finally {
@@ -313,26 +285,11 @@ async function loadYears() {
 }
 
 async function onBrandChange() {
-  seriesValue.value = ''
   modelValue.value = ''
   yearValue.value = ''
-  seriesOptions.value = []
   modelOptions.value = []
   yearOptions.value = []
   if (!brandValue.value) return
-  try {
-    await loadSeries()
-  } catch {
-    // The API client already shows the error.
-  }
-}
-
-async function onSeriesChange() {
-  modelValue.value = ''
-  yearValue.value = ''
-  modelOptions.value = []
-  yearOptions.value = []
-  if (!seriesValue.value) return
   try {
     await loadModels()
   } catch {
@@ -356,7 +313,6 @@ function currentPayload() {
   const oeSource = !oe ? null : usedOcrCandidate.value || store.oeCandidates.includes(oe) ? 'ocr' : 'manual'
   return {
     brand: brandValue.value || null,
-    series: seriesValue.value || null,
     model: modelValue.value || null,
     year: yearValue.value || null,
     oe_number: oe || null,
@@ -385,10 +341,8 @@ async function submit() {
 
 function clearVehicle() {
   brandValue.value = ''
-  seriesValue.value = ''
   modelValue.value = ''
   yearValue.value = ''
-  seriesOptions.value = []
   modelOptions.value = []
   yearOptions.value = []
 }
@@ -410,7 +364,6 @@ async function clear() {
   if (store.session?.public_id) {
     await store.setVehicle({
       brand: null,
-      series: null,
       model: null,
       year: null,
       oe_number: null,
@@ -423,8 +376,7 @@ onMounted(async () => {
   hydrate()
   await loadBrands()
   try {
-    if (brandValue.value) await loadSeries()
-    if (seriesValue.value) await loadModels()
+    if (brandValue.value) await loadModels()
     if (modelValue.value) await loadYears()
   } catch {
     // The API client already shows the error.

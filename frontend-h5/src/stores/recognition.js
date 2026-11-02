@@ -37,6 +37,28 @@ export const useRecognitionStore = defineStore('recognition', {
       const res = await api.get(`/api/v1/public/recognize/${this.session.public_id}`)
       this.session = res.data
     },
+    async loadSessionByPublicId(publicId) {
+      const sid = String(publicId || '').trim()
+      if (!sid) throw new Error('missing_public_id')
+      this.loading = true
+      try {
+        const res = await api.get(`/api/v1/public/recognize/${sid}`)
+        this.session = res.data
+        this.products = []
+        this.oeCandidates = []
+        this.oeOcrMeta = null
+        this.oeConfirmed = false
+        try {
+          const productsRes = await api.get(`/api/v1/public/recognize/${sid}/products`)
+          this.products = productsRes.data || []
+        } catch {
+          this.products = []
+        }
+        return this.session
+      } finally {
+        this.loading = false
+      }
+    },
     async uploadImages(files, purpose = 'part', sortOrder = 0) {
       const form = new FormData()
       form.append('purpose', purpose)

@@ -129,32 +129,26 @@ DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp
 
 ## 本地产品与车型目录
 
-产品、OE 号和车型不再调用 mdm-query。数据放在本服务自己的 MySQL 库中，由海豚调度器写入；识图服务只读取这三张表，不提供目录维护接口。
-
-应用账号对以下表只授予 `SELECT`。海豚使用单独的写入账号，可以用 `TRUNCATE` 后全量导入，或按唯一键做 `INSERT ... ON DUPLICATE KEY UPDATE`。`price` 按源数据原值保存和返回，服务不做分/元换算。
-
-API 首次启动会建出空表。海豚不要再用全 `LONGTEXT`、无主键的旧 DDL 覆盖它们。
+产品、OE、车型与散热器技术参数由本应用自有表维护（管理后台 Excel 导入），**不再依赖海豚调度器同步的 `*_usa` 表**。`material_code` 即 SKU 唯一标识；展示名使用 material_code；品类来自 OE 表 `category`。
 
 | 表 | 主键 / 唯一键 | 用途 |
 |----|---------------|------|
-| `product_basic_info_usa` | `material_code`，`short_num` 有索引 | 物料名称与价格。图库 SKU 对应 `short_num` |
-| `vehicle_basic_info_usa` | `reach_car_id` | 品牌、车系、车型、年款级联 |
-| `product_oe_vehicle_usa` | 自增 `id`，唯一键 `(material_code, ref_num, reach_car_id)` | OE 与车型适配关系 |
-
-字段使用可索引的 `VARCHAR`：物料号 64、OE 号 128、车型 ID 64，品牌/车系/车型 128，标准名称 1024。三张表都没有业务外键和时间戳，避免全量换表时互相阻塞。
+| `vision_part_oe` | `(material_code, oe)` | 品类 + 物料 + OE（含 `oe_normalized`） |
+| `vision_part_vehicle` | `(material_code, make_name, model_name, year)` | 物料适配车型（品牌/车型/年款） |
+| `vision_radiator_spec` | `material_code` unique | 散热器技术参数 |
+| `vision_catalog_import_logs` | 自增 id | Excel 导入审计 |
 
 匹配规则：
 
-1. 图库 SKU 对应 `product_basic_info_usa.short_num`。没选车型和 OE 时，保持图库 SKU 或品类候选的原顺序，并用产品表补名称和价格。OE、车型适配仍按 `material_code` 关联。
-2. OE 是强约束。优先返回它和图片候选的交集；没有交集时返回该 OE 直接关联的产品。
-3. 车型按已选层级过滤并按适配车型数量重排。和图片候选没有交集时返回空结果。
-4. 两者都选时，先按 OE 限定，再用车型过滤。
-5. 图库没有可靠 SKU 时，用品类名匹配 `standard_label_cn/en`（最多 20 条），再应用车型约束。
-6. 产品卡片不显示库存。零件号只显示一个：用零件号搜索时显示所搜的 `ref_num`；否则显示适配到的第一个 `ref_num`。选了车型时只取适配该车型的零件号。
+1. 图库 SKU == `material_code`。没选车型和 OE 时，保持图库 SKU 或品类候选顺序。
+2. OE 是强约束（按 `oe_normalized` 查询）。
+3. 车型级联为 **品牌 → 车型 → 年款**（无车系）。按已选层级过滤并按适配数量重排。
+4. 图库无可靠 SKU 时，按确认品类在 OE 表取 material_code（最多 20 条），再应用车型约束。
+5. 产品卡片不显示价格与库存；可附带 `attributes.specs`（散热器技术参数非空字段）。
 
 ## 手机 H5
 
-首页一步完成：上传 1–8 张零件照片，可选填品牌、车系、车型、年款，或手工输入 / 铭牌识别 OE，然后点「开始识别」。没有单独的车型/OE 步骤，`/match` 会回到首页。
+首页一步完成：上传 1–8 张零件照片，可选填品牌、车型、年款，或手工输入 / 铭牌识别 OE，然后点「开始识别」。没有单独的车型/OE 步骤，`/match` 会回到首页。
 
 车型和 OE 两个区域各自有「清空」。清空车型不影响 OE；清空 OE 会清掉输入、铭牌图和识别结果。
 
@@ -207,7 +201,7 @@ API 首次启动会建出空表。海豚不要再用全 `LONGTEXT`、无主键�
 
 产品页左右并排：左边是用户照片，右边是匹配产品的 360 图。用户照片用箭头切换；360 图按住左右拖动旋转，点图片看大图。有多个候选时，点下方产品切换右侧 360 图。角度按文件名排成一圈，打开时停在检索命中的那一张。
 
-360 原图目录优先用 `PHOTO360_ROOT`。没配时读取索引 `latest_meta.json` 或 `index_meta.json` 里的 `photo360_root`。结构是 `{品类文件夹}/{sku}/{r*.jpg}`。图库 SKU 就是产品文件夹名，对应 `short_num`。目录不存在或该 SKU 没有图片时，右侧显示「暂无 360 图」。
+360 原图目录优先用 `PHOTO360_ROOT`。没配时读取索引 `latest_meta.json` 或 `index_meta.json` 里的 `photo360_root`。结构是 `{品类文件夹}/{sku}/{r*.jpg}`。图库 SKU 就是产品文件夹名，对应目录 `material_code`。目录不存在或该 SKU 没有图片时，右侧显示「暂无 360 图」。
 
 ### 导入索引到 Qdrant
 
@@ -255,8 +249,111 @@ source .venv/bin/activate
 pytest -q
 ```
 
+## 三品类约束与目录维护
+
+全链路（识别 / H5 / Web / WhatsApp）仅支持 **Compressor / Condenser / Radiator**（压缩机 / 冷凝器 / 散热器）。其它汽配品类会提示暂不支持；WhatsApp 使用固定英文回复 `WHATSAPP_UNSUPPORTED_CATEGORY_REPLY`。
+
+对外产品接口与客服回复**不返回价格 / 库存 / 可供状态**；WhatsApp 只负责根据用户信息定位 SKU，被问价格或库存时引导联系销售。
+
+车型检索可只凭 brand / model / year 从 `vision_part_vehicle` 出 SKU（不必先有 OE 行）。brand/model 支持大小写、空格、标点的宽松匹配；真正的别名（如「日产」→ Nissan）需要额外别名表，当前未做。
+
+### 后台 Excel 目录（自有表）
+
+| 菜单 | 表 | 能力 |
+|------|-----|------|
+| OE 零件号 | `vision_part_oe` | 列表 / 模板 / 导入 / 导出（列：category, material_code, OE） |
+| 车型 | `vision_part_vehicle` | 同上（列：material_code, make_name, model_name, year） |
+| 技术参数 | `vision_radiator_spec` | Radiator 全字段可用；Compressor/Condenser 仍占位（导入 501） |
+
+权限：`catalog:read` / `catalog:write`。API 前缀：`/api/v1/admin/catalog/...`。
+
+WhatsApp 工具 `search_products_by_specs` 在 `category=radiator` 时按 `vision_radiator_spec` 字段过滤。
+
+## WhatsApp 智能客服（Meta Cloud API）
+
+面向海外客户的文字 + 照片客服：用户发 WhatsApp 文本或零件照片 → Meta Cloud API webhook → DeepSeek Chat（function calling）查本地产品/OE/车型目录，或照片走完整识别流水线（DINOv2 SKU 直匹配 → DeepSeek Vision 回退）→ 英文回复。不主动发模板消息；只在 24 小时会话窗口内回复。仅支持压缩机 / 冷凝器 / 散热器；不报价。
+
+### 欢迎卡片与快捷按钮
+
+- 首次联系，或上一会话空闲超过 `WHATSAPP_CONVERSATION_IDLE_HOURS`（默认 24 小时）后新建会话时，自动发送英文欢迎卡片（interactive reply buttons）。
+- 三个快捷按钮：`Send a photo` / `Find by OE` / `Search by vehicle`；点击后直接回英文引导文案，不走 LLM。
+- 欢迎只发一次（`wa_conversations.welcome_sent_at`）；范围仅覆盖识图、OE、车型匹配产品，不含库存/订单。
+
+### 结果页链接与共享账号（360°）
+
+- 识图成功且有匹配产品 / SKU 时，英文回复末尾追加一条 H5 深链：`{WHATSAPP_H5_BASE_URL}/wa?sid={public_id}`（只需会话 id）。
+- 点开后 H5 `/wa` 调用 `POST /api/v1/public/auth/wa-open`，自动以共享 AppUser（默认 `Lee`）登录，再跳到 `/wa/match`（仅匹配结果 + 360°）。
+- WhatsApp 识图会话创建时归属到该共享账号；`WHATSAPP_H5_BASE_URL` 为空则不附带链接。
+- **推荐本地调试**：`cd frontend-h5 && npm run build:h5`，由 FastAPI 在 `/h5` 提供静态页；`WHATSAPP_H5_BASE_URL` 设为与 webhook 同一 ngrok，例如 `https://<ngrok>/h5`。这样不必再开 Cloudflare 隧道（Vite 开发服经隧道拉模块容易被掐断）。
+
+### Meta 后台配置
+
+1. [Meta for Developers](https://developers.facebook.com/) 创建 App，添加 WhatsApp 产品。
+2. WhatsApp → Configuration → Webhook：
+   - Callback URL：`https://<公网域名>/sms/whatsapp/<WHATSAPP_WEBHOOK_PATH_TOKEN>`
+   - Verify token：与 `WHATSAPP_VERIFY_TOKEN` 一致（默认 `reach-use`）
+   - 订阅字段：`messages`
+3. API Setup / System User：获取永久 `ACCESS_TOKEN`、`PHONE_NUMBER_ID`；App Settings → Basic 复制 `App Secret`。
+4. 测试号需把收件人手机加入允许列表。
+
+### 本地用 ngrok 调试
+
+公网服务器暂时无法更新代码时，可用 ngrok 把本机 8000 暴露给 Meta：
+
+```bash
+# 终端 1：启动本服务
+./scripts/start_dev.sh --api-only
+
+# 终端 2：隧道
+ngrok http 8000
+```
+
+Callback URL 示例：
+
+```text
+https://fragile-strung-gully.ngrok-free.dev/sms/whatsapp/3ffcb52b3d3140c6933dde80b43cafa8
+```
+
+Verify token：`reach-use`。调试面板：<http://127.0.0.1:4040>。免费 ngrok 域名重启后会变，需回 Meta 重新 Verify。
+
+### 环境变量（`backend/.env`）
+
+```env
+WHATSAPP_ENABLED=true
+WHATSAPP_WEBHOOK_PATH_TOKEN=3ffcb52b3d3140c6933dde80b43cafa8
+WHATSAPP_VERIFY_TOKEN=reach-use
+WHATSAPP_APP_SECRET=your-app-secret
+WHATSAPP_ACCESS_TOKEN=your-access-token
+WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
+WHATSAPP_GRAPH_API_VERSION=v21.0
+WHATSAPP_IMAGE_DEBOUNCE_SECONDS=15
+WHATSAPP_IMAGE_SESSION_TTL_MINUTES=10
+WHATSAPP_RECOGNITION_TIMEOUT_SECONDS=90
+WHATSAPP_H5_BASE_URL=https://your-h5.example.com
+WHATSAPP_SHARED_APP_USER_USERNAME=Lee
+WHATSAPP_SHARED_APP_USER_PASSWORD=123456
+WHATSAPP_LINK_TOKEN_TTL_HOURS=72
+DEEPSEEK_CHAT_MODEL=deepseek-chat
+DEEPSEEK_CHAT_MAX_TOOL_ROUNDS=4
+```
+
+Webhook 路由挂在 API 根路径（不经 `/api/v1`）：`GET/POST /sms/whatsapp/{token}`。线上由 `pbx-reach.nsvoip.net:5001` 网关转发到本服务。
+
+消息处理走独立 Celery 队列 `whatsapp`（`celery_whatsapp` worker），避免排在 DINOv2 识别 worker 后面。管理后台「WhatsApp 对话」可查看会话与工具调用；system prompt 在 Prompt 管理里 `purpose=whatsapp_chat`（默认全英文）。
+
+### 照片识别
+
+- 收到 image 消息后立即下载媒体（Meta 媒体 URL 约 5 分钟过期），压缩后写入与 H5 相同的 `UploadedImage` / `RecognitionSession`。
+- 同一用户在 `WHATSAPP_IMAGE_DEBOUNCE_SECONDS`（默认 15 秒）内连续发的照片（最多 8 张）聚合为同一识别会话，只触发一次识别、只回复一次。
+- 聚合结束后投递默认识别队列（`recognition.run_vision`）：DINOv2 + Qdrant SKU 直匹配 → 未命中再 DeepSeek Vision；随后本地目录出产品，DeepSeek Chat 生成英文回复；有产品时追加 H5 360° 结果页链接（见上节）。
+- 识别 worker 不在线时返回英文提示，不在 WhatsApp worker 内联加载 DINOv2。轮询超时默认 90 秒。
+- 上传图仍按 `IMAGE_RETENTION_DAYS`（默认 30 天）清理。管理后台气泡可跳到对应识别会话详情。
+
+发给用户的全部文案为英文（prompt、工具 schema、兜底回复、品类名）。目录检索优先返回 `standard_label_en`。
+
 ## 后续可增强
 
+- 人工接管与文档知识库（RAG）
 - 感知哈希结果缓存进一步降本
 - 生产反向代理与 HTTPS
 - Flower / 任务死信队列可视化

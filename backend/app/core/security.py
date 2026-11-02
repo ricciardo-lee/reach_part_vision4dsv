@@ -62,6 +62,16 @@ def create_app_user_token(subject: str) -> str:
     )
 
 
+def create_app_user_link_token(subject: str, hours: int) -> str:
+    """Short-lived (or custom TTL) app-user access token for WhatsApp H5 deep links."""
+    return create_token(
+        subject,
+        "access",
+        timedelta(hours=max(1, int(hours))),
+        {"actor": ACTOR_APP_USER},
+    )
+
+
 def decode_token(token: str) -> dict[str, Any]:
     try:
         return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])

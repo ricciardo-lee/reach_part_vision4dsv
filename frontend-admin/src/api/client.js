@@ -14,6 +14,9 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => {
+    if (response.config.responseType === 'blob') {
+      return response
+    }
     const body = response.data
     if (body && body.success === false) {
       ElMessage.error(body.message || '请求失败')
@@ -31,5 +34,15 @@ api.interceptors.response.use(
     return Promise.reject(error)
   },
 )
+
+export async function downloadBlob(url, filename, params = {}) {
+  const res = await api.get(url, { params, responseType: 'blob' })
+  const blob = res.data instanceof Blob ? res.data : new Blob([res.data])
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(link.href)
+}
 
 export default api

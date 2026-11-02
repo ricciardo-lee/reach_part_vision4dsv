@@ -17,7 +17,7 @@
 
       <el-card class="pane" shadow="never">
         <template #header>{{ t('result.confirmHeader') }}</template>
-        <template v-if="isAutoPart">
+        <template v-if="isAutoPart && isSupported">
           <el-descriptions v-if="result" :column="1" border size="small">
             <el-descriptions-item :label="t('result.topCategory')">
               {{ categoryLabel(result.mapped_category_name || result.part_name) || '-' }}
@@ -34,6 +34,7 @@
           </el-descriptions>
 
           <h3>{{ t('result.candidates') }}</h3>
+          <p class="muted">{{ t('category.supportedList') }}</p>
           <el-radio-group v-model="selectedName" class="candidate-group" @change="onRadioChange">
             <el-radio
               v-for="(item, index) in candidates"
@@ -53,7 +54,14 @@
             </el-radio>
           </el-radio-group>
           <el-form-item :label="t('result.manual')" class="manual">
-            <el-input id="manual-category" v-model="manualName" :placeholder="t('result.manualPlaceholder')" />
+            <el-select id="manual-category" v-model="manualPick" :placeholder="t('result.manualPlaceholder')" @change="onManualPick">
+              <el-option
+                v-for="opt in supportedOptions"
+                :key="opt.id"
+                :label="t(opt.labelKey)"
+                :value="opt.id"
+              />
+            </el-select>
           </el-form-item>
           <div class="consent">
             <el-checkbox v-model="optimizationConsent" @change="onConsentChange">
@@ -65,7 +73,31 @@
           </div>
           <div class="result-actions">
             <el-button @click="router.push('/')">{{ t('result.back') }}</el-button>
-            <el-button type="primary" :loading="loading" @click="next">{{ t('result.queryProducts') }}</el-button>
+            <el-button type="primary" :loading="loading" :disabled="!canProceed" @click="next">{{ t('result.queryProducts') }}</el-button>
+          </div>
+        </template>
+
+        <template v-else-if="isAutoPart && !isSupported">
+          <el-alert type="warning" :title="t('category.unsupportedTitle')" :closable="false" show-icon />
+          <el-descriptions v-if="result" :column="1" border size="small" class="reject-copy">
+            <el-descriptions-item :label="t('result.recognizedAs')">{{
+              result.part_name || t('result.nonAutoContent')
+            }}</el-descriptions-item>
+            <el-descriptions-item :label="t('result.description')">{{ t('category.unsupportedHint') }}</el-descriptions-item>
+          </el-descriptions>
+          <el-form-item :label="t('result.manual')" class="manual">
+            <el-select v-model="manualPick" :placeholder="t('result.manualPlaceholder')" @change="onManualPick">
+              <el-option
+                v-for="opt in supportedOptions"
+                :key="opt.id"
+                :label="t(opt.labelKey)"
+                :value="opt.id"
+              />
+            </el-select>
+          </el-form-item>
+          <div class="result-actions">
+            <el-button @click="retake">{{ t('result.retake') }}</el-button>
+            <el-button type="primary" :loading="loading" :disabled="!canProceed" @click="next">{{ t('result.queryProducts') }}</el-button>
           </div>
         </template>
 
@@ -96,6 +128,13 @@ import { categoryLabelKey, knownErrorKey } from '@shared/locales/index.js'
 import { useRecognitionStore } from '@/stores/recognition'
 import QueryImageGallery from '@/components/QueryImageGallery.vue'
 
+const SUPPORTED_IDS = new Set(['compressor', 'condenser', 'radiator'])
+const supportedOptions = [
+  { id: 'compressor', code: 'COMPRESSOR', labelKey: 'category.compressor' },
+  { id: 'condenser', code: 'CONDENSER', labelKey: 'category.condenser' },
+  { id: 'radiator', code: 'RADIATOR', labelKey: 'category.radiator' },
+]
+
 const { t } = useI18n()
 const router = useRouter()
 const store = useRecognitionStore()
@@ -103,6 +142,7 @@ const loading = ref(false)
 const selectedCode = ref('')
 const selectedName = ref('')
 const manualName = ref('')
+const manualPick = ref('')
 const optimizationConsent = ref(Boolean(store.session?.optimization_consent))
 
 const result = computed(() => store.session?.result)
@@ -114,13 +154,26 @@ const isAutoPart = computed(() => {
   if (store.session?.result?.is_auto_part === false) return false
   return true
 })
+const isSupported = computed(() => {
+  if (store.session?.is_supported_category === false) return false
+  if ((store.session?.error_message || '') === 'unsupported_category') return false
+  return true
+})
 const rejectReason = computed(() => {
   const msg = store.session?.error_message || result.value?.reason || ''
   if (!msg) return t('result.notAutoPartReason')
   const key = knownErrorKey(msg)
   return key ? t(key) : msg
 })
-const candidates = computed(() => result.value?.candidates || [])
+function isSupportedCandidate(item) {
+  const code = String(item?.category_code || '').toLowerCase()
+  const name = String(item?.category_name || item?.name || '')
+  if (SUPPORTED_IDS.has(code)) return true
+  if (['压缩机', '冷凝器', '散热器'].some((cn) => name.includes(cn))) return true
+  return Boolean(categoryLabelKey(item?.category_code || item?.category_name || item?.name))
+}
+const candidates = computed(() => (result.value?.candidates || []).filter(isSupportedCandidate))
+const canProceed = computed(() => Boolean(manualName.value || selectedName.value))
 const confidenceLevel = computed(() => {
   const confidence = result.value?.confidence || 0
   if (confidence >= 0.8) return 'high'
@@ -137,6 +190,14 @@ function categoryLabel(idOrName) {
 function selectCandidate(item) {
   selectedCode.value = item.category_code || ''
   selectedName.value = item.category_name || item.name
+  manualName.value = selectedName.value
+}
+
+function onManualPick(id) {
+  const opt = supportedOptions.find((item) => item.id === id)
+  if (!opt) return
+  selectedCode.value = opt.code
+  selectedName.value = t(opt.labelKey)
   manualName.value = selectedName.value
 }
 
@@ -204,12 +265,14 @@ onMounted(() => {
     return
   }
   if (!isAutoPart.value || !result.value) return
-  selectCandidate({
+  const seed = {
     category_code: result.value.mapped_category_code,
     category_name: result.value.mapped_category_name || result.value.part_name,
     name: result.value.part_name,
     confidence: result.value.confidence,
-  })
+  }
+  if (isSupportedCandidate(seed)) selectCandidate(seed)
+  else if (candidates.value[0]) selectCandidate(candidates.value[0])
 })
 </script>
 

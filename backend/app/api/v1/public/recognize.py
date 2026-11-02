@@ -42,6 +42,11 @@ from app.schemas import (
 )
 from app.services.bootstrap import image_expiry, new_public_id
 from app.services.catalog import catalog_service
+from app.services.category_guard import (
+    ensure_supported_category_value,
+    is_supported_category,
+    supported_category_payload,
+)
 from app.services.part_guard import ensure_auto_part, session_is_auto_part
 from app.services.recognition import run_oe_ocr
 from app.utils.images import compress_to_jpeg_bytes, compute_phash, validate_image_meta
@@ -179,6 +184,18 @@ async def serialize_session(session: RecognitionSession) -> RecognitionSessionOu
             ],
         )
 
+    confirmed_supported = True
+    if session.confirmed_category_code or session.confirmed_category_name:
+        confirmed_supported = is_supported_category(
+            session.confirmed_category_code or session.confirmed_category_name
+        )
+    elif latest and (latest.mapped_category_code or latest.mapped_category_name or latest.part_name):
+        confirmed_supported = is_supported_category(
+            latest.mapped_category_code or latest.mapped_category_name or latest.part_name
+        )
+    elif (session.error_message or "") == "unsupported_category":
+        confirmed_supported = False
+
     return RecognitionSessionOut(
         public_id=session.public_id,
         status=session.status,
@@ -188,6 +205,8 @@ async def serialize_session(session: RecognitionSession) -> RecognitionSessionOu
             recognition_mode=recognition_mode,
         ),
         is_auto_part=is_auto_part,
+        is_supported_category=confirmed_supported,
+        supported_categories=supported_category_payload(),
         recognition_mode=recognition_mode,
         images=image_out,
         result=result_out,
@@ -423,8 +442,12 @@ async def confirm_category(
     session: RecognitionSession = Depends(get_recognition_session),
 ) -> APIResponse:
     await ensure_auto_part(session)
-    session.confirmed_category_code = payload.category_code
-    session.confirmed_category_name = payload.category_name
+    cid = ensure_supported_category_value(payload.category_code, payload.category_name)
+    from app.core.constants import CATEGORY_CN
+    from app.services.category_guard import normalize_category_code
+
+    session.confirmed_category_code = normalize_category_code(cid) or cid.upper()
+    session.confirmed_category_name = CATEGORY_CN.get(cid) or payload.category_name
     session.optimization_consent = payload.optimization_consent
     from datetime import datetime
 
@@ -436,8 +459,8 @@ async def confirm_category(
     logger.info(
         "Confirm category | public_id=%s | code=%s | name=%s | consent=%s",
         session.public_id,
-        payload.category_code,
-        payload.category_name,
+        session.confirmed_category_code,
+        session.confirmed_category_name,
         payload.optimization_consent,
     )
     await AuditLog.create(
@@ -504,8 +527,14 @@ async def set_vehicle_filter(
     session: RecognitionSession = Depends(get_recognition_session),
 ) -> APIResponse:
     await ensure_auto_part(session)
+    if session.confirmed_category_code or session.confirmed_category_name:
+        ensure_supported_category_value(
+            session.confirmed_category_code,
+            session.confirmed_category_name,
+        )
     session.vehicle_brand = _blank_to_none(payload.brand)
-    session.vehicle_series = _blank_to_none(payload.series)
+    # series column retained for legacy sessions; no longer collected from clients
+    session.vehicle_series = None
     session.vehicle_model = _blank_to_none(payload.model)
     session.vehicle_year = _blank_to_none(payload.year)
     oe_number = _blank_to_none(payload.oe_number)
@@ -517,10 +546,9 @@ async def set_vehicle_filter(
         session.oe_source = None
     await session.save()
     logger.info(
-        "Set vehicle filter | public_id=%s | brand=%s | series=%s | model=%s | year=%s | oe=%s",
+        "Set vehicle filter | public_id=%s | brand=%s | model=%s | year=%s | oe=%s",
         session.public_id,
         payload.brand,
-        payload.series,
         payload.model,
         payload.year,
         session.oe_number,
@@ -564,6 +592,11 @@ async def confirm_oe(
     session: RecognitionSession = Depends(get_recognition_session),
 ) -> APIResponse:
     await ensure_auto_part(session)
+    if session.confirmed_category_code or session.confirmed_category_name:
+        ensure_supported_category_value(
+            session.confirmed_category_code,
+            session.confirmed_category_name,
+        )
     session.oe_number = payload.oe_number.strip().upper()
     session.oe_source = "ocr"
     await session.save()
@@ -578,10 +611,24 @@ async def confirm_oe(
 @router.get("/{public_id}/products", response_model=APIResponse)
 async def search_products(session: RecognitionSession = Depends(get_recognition_session)) -> APIResponse:
     await ensure_auto_part(session)
+    if session.confirmed_category_code or session.confirmed_category_name:
+        ensure_supported_category_value(
+            session.confirmed_category_code,
+            session.confirmed_category_name,
+        )
     logger.info("Search products | public_id=%s", session.public_id)
     payload = await catalog_service.search_for_session(session)
-    logger.info("Search products done | public_id=%s | count=%s", session.public_id, len(payload))
-    return APIResponse(data=payload)
+    # Never expose price on the public recognition API.
+    cleaned = []
+    for item in payload or []:
+        if isinstance(item, dict):
+            row = dict(item)
+            row.pop("price", None)
+            cleaned.append(row)
+        else:
+            cleaned.append(item)
+    logger.info("Search products done | public_id=%s | count=%s", session.public_id, len(cleaned))
+    return APIResponse(data=cleaned)
 
 
 @router.post("/{public_id}/feedback", response_model=APIResponse)

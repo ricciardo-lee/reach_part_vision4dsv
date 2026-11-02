@@ -4,7 +4,7 @@
       <span class="brand">{{ t('common.brand') }}</span>
       <span class="product">{{ t('common.product') }}</span>
       <span class="spacer" />
-      <LocaleSwitcher />
+      <LocaleSwitcher v-if="!isWaFlow" />
       <template v-if="showUser">
         <span class="user">{{ displayName }}</span>
         <button type="button" class="logout" @click="logout">{{ t('common.signOutShort') }}</button>
@@ -27,7 +27,10 @@ const route = useRoute()
 const router = useRouter()
 const store = useRecognitionStore()
 const displayName = ref(localStorage.getItem('app_name') || '')
-const showUser = computed(() => route.path !== '/login' && Boolean(displayName.value))
+const isWaFlow = computed(() => route.path === '/wa' || route.path.startsWith('/wa/'))
+const showUser = computed(
+  () => route.path !== '/login' && !isWaFlow.value && Boolean(displayName.value),
+)
 
 watch(
   () => route.path,

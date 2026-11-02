@@ -54,7 +54,33 @@ services:
     command:
       - sh
       - -c
-      - python /app/ensure_models.py && exec celery -A app.tasks.celery_app.celery_app worker -l info --concurrency=1
+      - python /app/ensure_models.py && exec celery -A app.tasks.celery_app.celery_app worker -l info --concurrency=1 -Q celery
+
+  worker_whatsapp:
+    container_name: parts-vision-worker-whatsapp
+    image: reach-part-vision-backend:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - uploads:/data/uploads
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app.celery_app
+      - worker
+      - -l
+      - info
+      - -Q
+      - whatsapp
+      - --concurrency=${WHATSAPP_WORKER_CONCURRENCY:-4}
+      - --hostname=whatsapp@%h
 
   beat:
     container_name: parts-vision-beat

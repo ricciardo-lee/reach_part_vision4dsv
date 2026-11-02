@@ -7,8 +7,12 @@ from typing import Optional
 from app.core.config import settings
 from app.core.constants import ROLE_SUPERADMIN
 from app.core.security import hash_password
-from app.models import AdminUser, CategoryMapping, PromptConfig
-from app.core.constants import DEFAULT_OE_OCR_PROMPT, DEFAULT_VISION_PROMPT
+from app.models import AdminUser, AppUser, CategoryMapping, PromptConfig
+from app.core.constants import (
+    DEFAULT_OE_OCR_PROMPT,
+    DEFAULT_VISION_PROMPT,
+    DEFAULT_WHATSAPP_CHAT_PROMPT,
+)
 
 
 def _count_from_rows(rows) -> int:
@@ -245,6 +249,83 @@ async def ensure_schema_patches() -> None:
             "FOREIGN KEY (app_user_id) REFERENCES vision_app_users (id)"
         )
 
+    # WhatsApp message extras for photo recognition linkage.
+    for column, ddl in (
+        (
+            "recognition_session_id",
+            "ALTER TABLE wa_messages ADD COLUMN recognition_session_id INT NULL, "
+            "ADD KEY idx_wa_messages_recognition_session_id (recognition_session_id)",
+        ),
+        (
+            "media_id",
+            "ALTER TABLE wa_messages ADD COLUMN media_id VARCHAR(128) NULL",
+        ),
+        (
+            "object_key",
+            "ALTER TABLE wa_messages ADD COLUMN object_key VARCHAR(255) NULL",
+        ),
+    ):
+        _, wa_cols = await conn.execute_query(
+            "SELECT COUNT(*) AS c FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'wa_messages' "
+            f"AND COLUMN_NAME = '{column}'"
+        )
+        wa_col = wa_cols[0] if wa_cols else {}
+        wa_count = (
+            wa_col.get("c", 0) if isinstance(wa_col, dict) else (wa_col[0] if wa_col else 0)
+        )
+        if not wa_count:
+            try:
+                await conn.execute_script(ddl)
+            except Exception:  # noqa: BLE001
+                # Table may not exist yet on first boot; generate_schemas creates it.
+                pass
+
+    # WhatsApp conversation welcome card marker.
+    _, welcome_cols = await conn.execute_query(
+        "SELECT COUNT(*) AS c FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'wa_conversations' "
+        "AND COLUMN_NAME = 'welcome_sent_at'"
+    )
+    welcome_col = welcome_cols[0] if welcome_cols else {}
+    welcome_count = (
+        welcome_col.get("c", 0)
+        if isinstance(welcome_col, dict)
+        else (welcome_col[0] if welcome_col else 0)
+    )
+    if not welcome_count:
+        try:
+            await conn.execute_script(
+                "ALTER TABLE wa_conversations ADD COLUMN welcome_sent_at DATETIME(6) NULL"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Widen OE columns (supplier sheets / Excel float expansion can exceed VARCHAR(128)).
+    for column in ("oe", "oe_normalized"):
+        _, oe_cols = await conn.execute_query(
+            "SELECT CHARACTER_MAXIMUM_LENGTH AS len FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vision_part_oe' "
+            f"AND COLUMN_NAME = '{column}'"
+        )
+        oe_col = oe_cols[0] if oe_cols else {}
+        oe_len = (
+            oe_col.get("len")
+            if isinstance(oe_col, dict)
+            else (oe_col[0] if oe_col else None)
+        )
+        try:
+            need_widen = oe_len is not None and int(oe_len) < 512
+        except (TypeError, ValueError):
+            need_widen = False
+        if need_widen:
+            try:
+                await conn.execute_script(
+                    f"ALTER TABLE vision_part_oe MODIFY COLUMN {column} VARCHAR(512) NOT NULL"
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
     await _copy_integer_pk_rows(
         conn,
         legacy="audit_logs",
@@ -276,6 +357,17 @@ async def ensure_bootstrap_data() -> None:
             is_active=True,
         )
 
+    shared_username = (settings.WHATSAPP_SHARED_APP_USER_USERNAME or "").strip()
+    if shared_username:
+        shared = await AppUser.get_or_none(username=shared_username)
+        if not shared:
+            await AppUser.create(
+                username=shared_username,
+                password_hash=hash_password(settings.WHATSAPP_SHARED_APP_USER_PASSWORD or "123456"),
+                display_name=shared_username,
+                is_active=True,
+            )
+
     vision = await PromptConfig.get_or_none(name="default_vision")
     if not vision:
         await PromptConfig.create(
@@ -305,17 +397,34 @@ async def ensure_bootstrap_data() -> None:
             note="初始 OE 铭牌识别 Prompt",
         )
 
+    wa = await PromptConfig.get_or_none(name="default_whatsapp_chat")
+    if not wa:
+        await PromptConfig.create(
+            name="default_whatsapp_chat",
+            version="v2",
+            purpose="whatsapp_chat",
+            content=DEFAULT_WHATSAPP_CHAT_PROMPT,
+            is_active=True,
+            note="WhatsApp prompt: identify SKU only; no price/stock/availability",
+        )
+    elif "Do not mention price, stock, or availability" not in (wa.content or ""):
+        wa.version = "v2"
+        wa.content = DEFAULT_WHATSAPP_CHAT_PROMPT
+        wa.is_active = True
+        wa.note = "Auto-upgrade: identify SKU only; no price/stock/availability"
+        await wa.save()
+        await PromptConfig.filter(purpose="whatsapp_chat").exclude(id=wa.id).update(is_active=False)
+
+    # Only seed supported categories (Compressor / Condenser / Radiator).
     defaults = [
         ("散热器", "RADIATOR", "散热器"),
         ("水箱", "RADIATOR", "散热器"),
+        ("Radiator", "RADIATOR", "散热器"),
         ("冷凝器", "CONDENSER", "冷凝器"),
-        ("中冷器", "INTERCOOLER", "中冷器"),
-        ("压缩机", "COMPRESSOR", "空调压缩机"),
-        ("空调压缩机", "COMPRESSOR", "空调压缩机"),
-        ("蒸发器", "EVAPORATOR", "蒸发器"),
-        ("机油冷却器", "OIL_COOLER", "机油冷却器"),
-        ("风扇", "FAN", "冷却风扇"),
-        ("冷却风扇", "FAN", "冷却风扇"),
+        ("Condenser", "CONDENSER", "冷凝器"),
+        ("压缩机", "COMPRESSOR", "压缩机"),
+        ("空调压缩机", "COMPRESSOR", "压缩机"),
+        ("Compressor", "COMPRESSOR", "压缩机"),
     ]
     for alias, code, name in defaults:
         exists = await CategoryMapping.get_or_none(alias_name=alias)

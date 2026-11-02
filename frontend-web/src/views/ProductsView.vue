@@ -41,7 +41,6 @@
           >
             <span class="product-title">
               <strong>{{ item.name }}</strong>
-              <span>{{ item.price != null ? `¥${item.price}` : '-' }}</span>
             </span>
             <span class="muted">{{ t('products.skuLine', { sku: item.sku }) }}</span>
             <span class="muted">{{ item.fitment || t('products.fitmentMissing') }}</span>
@@ -55,9 +54,6 @@
         <template v-if="activeProduct">
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item :label="t('products.name')">{{ activeProduct.name }}</el-descriptions-item>
-            <el-descriptions-item :label="t('products.price')">{{
-              activeProduct.price != null ? `¥${activeProduct.price}` : '-'
-            }}</el-descriptions-item>
             <el-descriptions-item :label="t('products.sku')">{{ activeProduct.sku }}</el-descriptions-item>
             <el-descriptions-item :label="t('products.partNumber')">{{ partNumbers(activeProduct) }}</el-descriptions-item>
             <el-descriptions-item :label="t('products.fitmentField')" :span="2">{{
@@ -65,6 +61,9 @@
             }}</el-descriptions-item>
             <el-descriptions-item :label="t('products.matchReason')" :span="2">{{
               activeProduct.match_reason || t('products.matchResult')
+            }}</el-descriptions-item>
+            <el-descriptions-item v-if="specsSummary(activeProduct)" :label="t('products.specs')" :span="2">{{
+              specsSummary(activeProduct)
             }}</el-descriptions-item>
           </el-descriptions>
           <ImageCompare
@@ -135,12 +134,20 @@ const matchScore = computed(() => {
 const vehicleText = computed(() => {
   const parts = [
     store.session?.vehicle_brand,
-    store.session?.vehicle_series,
     store.session?.vehicle_model,
     store.session?.vehicle_year,
   ].filter(Boolean)
   return parts.length ? parts.join(' / ') : t('common.notSelected')
 })
+
+function specsSummary(item) {
+  const specs = item?.attributes?.specs
+  if (!specs || typeof specs !== 'object') return ''
+  return Object.entries(specs)
+    .slice(0, 6)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(', ')
+}
 
 async function feedback(correct) {
   try {

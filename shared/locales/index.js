@@ -49,6 +49,8 @@ export function knownErrorKey(message) {
     '未识别到汽配零件': 'errors.notAutoPart',
     '图片内容不是汽配零件': 'result.notAutoPartReason',
     '图片内容不是汽配零件，请重新拍摄零件照片': 'result.notAutoPartToast',
+    unsupported_category: 'category.unsupportedHint',
+    '暂仅支持压缩机、冷凝器、散热器三类零件': 'category.unsupportedHint',
   }
   return map[text] || null
 }
@@ -73,14 +75,12 @@ export function categoryLabelKey(idOrName) {
   const idMap = {
     compressor: 'category.compressor',
     condenser: 'category.condenser',
-    fan: 'category.fan',
     radiator: 'category.radiator',
   }
   if (idMap[raw]) return idMap[raw]
   const cnMap = {
     '压缩机': 'category.compressor',
     '冷凝器': 'category.condenser',
-    '风扇': 'category.fan',
     '散热器': 'category.radiator',
   }
   return cnMap[String(idOrName || '').trim()] || null

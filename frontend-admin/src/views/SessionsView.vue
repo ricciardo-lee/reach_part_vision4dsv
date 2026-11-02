@@ -77,7 +77,7 @@
             <dt>车型</dt>
             <dd>
               {{
-                [detail.session?.vehicle_brand, detail.session?.vehicle_series, detail.session?.vehicle_model]
+                [detail.session?.vehicle_brand, detail.session?.vehicle_model]
                   .filter(Boolean)
                   .join(' ') || '-'
               }}
@@ -170,8 +170,11 @@
 
 <script setup>
 import { onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '@/api/client'
+
+const route = useRoute()
 
 const items = ref([])
 const total = ref(0)
@@ -241,7 +244,13 @@ async function retry(publicId) {
   await load()
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  const detailId = route.query.detail
+  if (detailId) {
+    await showDetail(String(detailId))
+  }
+})
 </script>
 
 <style scoped>

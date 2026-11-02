@@ -59,6 +59,14 @@ if ! start_bg celery celery -A app.tasks.celery_app.celery_app worker -l info --
   exit 1
 fi
 
+# WhatsApp worker（独立队列，避免排在 DINOv2 识别 worker 后面）
+if ! start_bg celery_whatsapp celery -A app.tasks.celery_app.celery_app worker -l info \
+  -Q whatsapp --concurrency="${WHATSAPP_WORKER_CONCURRENCY:-4}" \
+  --hostname=whatsapp@%h \
+  --without-heartbeat --without-mingle --without-gossip; then
+  echo "WARN: WhatsApp Celery worker failed to start. WhatsApp replies will use inline fallback if enabled."
+fi
+
 # Celery beat（定时清图）
 if ! start_bg beat celery -A app.tasks.celery_app.celery_app beat -l info \
   --schedule="$LOG_DIR/celerybeat-schedule"; then
@@ -109,7 +117,8 @@ Docs:    http://127.0.0.1:${API_PORT}/docs
 H5:      http://127.0.0.1:${H5_PORT}/
 Web:     http://127.0.0.1:${WEB_PORT}/
 Admin:   http://127.0.0.1:${ADMIN_PORT}/
-Celery:  worker + beat started (see logs)
+Celery:  recognition worker + whatsapp worker + beat (see logs)
+Webhook: /sms/whatsapp/<WHATSAPP_WEBHOOK_PATH_TOKEN>
 
 Logs:    $LOG_DIR/
 PIDs:    $PID_DIR/

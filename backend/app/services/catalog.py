@@ -1,29 +1,35 @@
-"""Read-only USA product, OE, and vehicle catalog.
-
-DolphinScheduler refreshes the underlying tables. This module only issues
-SELECT queries and never inserts, updates, or deletes catalog rows.
-"""
+"""App-owned product / OE / vehicle / radiator-spec catalog (ORM only)."""
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from pydantic import BaseModel
-from tortoise import Tortoise
+from tortoise.functions import Count
 
-from app.core.config import settings
+from app.core.catalog_fields import RADIATOR_SPEC_FIELDS
 from app.core.exceptions import AppError
-from app.models import OeOcrResult, ProductQuerySnapshot, RetrievalResult
+from app.models import (
+    OeOcrResult,
+    ProductQuerySnapshot,
+    RetrievalResult,
+    VisionPartOe,
+    VisionPartVehicle,
+    VisionRadiatorSpec,
+)
 from app.schemas import ProductOut
-from app.services.similarity import SearchCandidateItem, SimilarityService
+from app.services.category_guard import category_cn, normalize_category_code
+from app.services.similarity import SearchCandidateItem
 
 logger = logging.getLogger(__name__)
 
 LABEL_MATCH_LIMIT = 20
 RESULT_LIMIT = 50
-REF_NUM_LIMIT = 1
+VEHICLE_MATERIAL_CAP = 200
 _OE_REMOVED_CHARS = (" ", "\t", "-", ".", "/", "·", "・")
+_VEHICLE_KEY_RE = re.compile(r"[^a-z0-9\u4e00-\u9fff]+")
 
 
 class VehicleOption(BaseModel):
@@ -42,10 +48,7 @@ class ImageCandidate:
 @dataclass(frozen=True)
 class CatalogProduct:
     material_code: str
-    short_num: str | None = None
-    standard_label_cn: str | None = None
-    standard_label_en: str | None = None
-    price: int | None = None
+    category_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,23 +60,20 @@ class _MatchRow:
 
 @dataclass(frozen=True)
 class CatalogVehicle:
-    reach_car_id: str
-    brand: str | None = None
-    series: str | None = None
-    model: str | None = None
-    model_year: str | None = None
+    make_name: str | None = None
+    model_name: str | None = None
+    year: str | None = None
 
 
 @dataclass(frozen=True)
 class VehicleSelection:
     brand: str | None = None
-    series: str | None = None
     model: str | None = None
     year: str | None = None
 
     def filled(self) -> dict[str, str]:
         values: dict[str, str] = {}
-        for key in ("brand", "series", "model", "year"):
+        for key in ("brand", "model", "year"):
             text = str(getattr(self, key) or "").strip()
             if text:
                 values[key] = text
@@ -91,39 +91,17 @@ def _clean(value: object) -> str:
     return str(value or "").strip()
 
 
-def _cell(row: object, key: str, index: int) -> object:
-    if isinstance(row, dict):
-        return row.get(key)
-    return row[index]
-
-
-def _product_from_row(row: object) -> CatalogProduct | None:
-    code = _clean(_cell(row, "material_code", 0))
-    if not code:
-        return None
-    raw_price = _cell(row, "price", 4)
-    try:
-        price = int(raw_price) if raw_price is not None else None
-    except (TypeError, ValueError):
-        price = None
-    return CatalogProduct(
-        material_code=code,
-        short_num=_clean(_cell(row, "short_num", 1)) or None,
-        standard_label_cn=_clean(_cell(row, "standard_label_cn", 2)) or None,
-        standard_label_en=_clean(_cell(row, "standard_label_en", 3)) or None,
-        price=price,
-    )
+def normalize_vehicle_key(value: object) -> str:
+    """Collapse case / spaces / punctuation for loose vehicle token matching."""
+    return _VEHICLE_KEY_RE.sub("", _clean(value).casefold())
 
 
 def _option_sort_key(opt: VehicleOption) -> tuple:
     text = (opt.label or opt.value or "").strip()
     try:
-        from pypinyin import lazy_pinyin
-
-        phonetic = "".join(lazy_pinyin(text)).casefold()
-    except Exception:  # noqa: BLE001
-        phonetic = text.casefold()
-    return (phonetic, opt.value.casefold(), opt.label)
+        return (0, int(text))
+    except ValueError:
+        return (1, text.casefold())
 
 
 def sort_options(options: list[VehicleOption]) -> list[VehicleOption]:
@@ -132,232 +110,135 @@ def sort_options(options: list[VehicleOption]) -> list[VehicleOption]:
 
 def option_letter(opt: VehicleOption) -> str:
     text = (opt.label or opt.value or "").strip()
-    try:
-        from pypinyin import lazy_pinyin
-
-        phonetic = "".join(lazy_pinyin(text)).strip()
-    except Exception:  # noqa: BLE001
-        phonetic = text
-    if not phonetic:
+    if not text:
         return "#"
-    char = phonetic[0].upper()
-    if "A" <= char <= "Z":
-        return char
+    ch = text[0].upper()
+    if "A" <= ch <= "Z":
+        return ch
     return "#"
 
 
 def index_options(options: list[VehicleOption]) -> dict:
-    groups_map: dict[str, list[dict]] = {}
-    flat: list[dict] = []
-    for opt in sort_options(list(options)):
+    sorted_opts = sort_options(options)
+    groups: dict[str, list[dict]] = {}
+    for opt in sorted_opts:
         letter = option_letter(opt)
-        item = {"value": opt.value, "label": opt.label, "letter": letter}
-        flat.append(item)
-        groups_map.setdefault(letter, []).append(item)
-    letters = [char for char in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if char in groups_map]
-    if "#" in groups_map:
-        letters.append("#")
-    groups = [{"letter": letter, "items": groups_map[letter]} for letter in letters]
-    return {"letters": letters, "groups": groups, "items": flat}
+        groups.setdefault(letter, []).append(opt.model_dump())
+    letters = sorted(groups.keys(), key=lambda x: (x == "#", x))
+    return {
+        "letters": letters,
+        "groups": [{"letter": letter, "items": groups[letter]} for letter in letters],
+        "items": [opt.model_dump() for opt in sorted_opts],
+    }
 
 
 def distinct_options(values: list[object]) -> list[VehicleOption]:
-    seen: dict[str, VehicleOption] = {}
+    seen: set[str] = set()
+    options: list[VehicleOption] = []
     for raw in values:
         text = _clean(raw)
-        if text and text not in seen:
-            seen[text] = VehicleOption(value=text, label=text)
-    return sort_options(list(seen.values()))
-
-
-def year_options(rows: list[tuple[str, str, str]]) -> list[VehicleOption]:
-    years: set[str] = set()
-    for model_year, year_from, year_till in rows:
-        current = _clean(model_year)
-        if current:
-            years.add(current)
+        if not text or text.casefold() in seen:
             continue
-        start = _clean(year_from)
-        end = _clean(year_till)
-        if start.isdigit() and end.isdigit():
-            left, right = int(start), int(end)
-            if 0 <= right - left <= 40:
-                years.update(str(year) for year in range(left, right + 1))
-    ordered = sorted(years, key=lambda item: (not item.isdigit(), int(item) if item.isdigit() else item))
-
-    def label_for(year: str) -> str:
-        return f"{year}款" if year.isdigit() else year
-
-    return [VehicleOption(value=year, label=label_for(year)) for year in ordered]
-
-
-def _like_pattern(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
-
-
-def _normalized_ref_sql(column: str = "ref_num") -> str:
-    expression = f"TRIM(IFNULL({column}, ''))"
-    for char in _OE_REMOVED_CHARS:
-        expression = f"REPLACE({expression}, '{char}', '')"
-    return f"UPPER({expression})"
-
-
-def vehicle_predicates(selection: VehicleSelection, alias: str = "v") -> tuple[str, list]:
-    filled = selection.filled()
-    clauses = [
-        f"{alias}.reach_car_id IS NOT NULL",
-        f"TRIM({alias}.reach_car_id) <> ''",
-    ]
-    params: list = []
-    for column in ("brand", "series", "model"):
-        if column in filled:
-            clauses.append(f"TRIM({alias}.{column}) = %s")
-            params.append(filled[column])
-    year = filled.get("year")
-    if year:
-        if year.isdigit():
-            clauses.append(
-                "("
-                f"TRIM(IFNULL({alias}.model_year, '')) = %s OR ("
-                f"{alias}.year_from REGEXP '^[0-9]+$' AND {alias}.year_till REGEXP '^[0-9]+$' "
-                f"AND CAST({alias}.year_from AS SIGNED) <= %s "
-                f"AND CAST({alias}.year_till AS SIGNED) >= %s)"
-                ")"
-            )
-            number = int(year)
-            params.extend([year, number, number])
-        else:
-            clauses.append(f"TRIM(IFNULL({alias}.model_year, '')) = %s")
-            params.append(year)
-    return " AND ".join(clauses), params
-
-
-def _chunks(values: list[str], size: int = 400) -> list[list[str]]:
-    return [values[index : index + size] for index in range(0, len(values), size)]
+        seen.add(text.casefold())
+        options.append(VehicleOption(value=text, label=text))
+    return sort_options(options)
 
 
 def _dedupe(values: list[str]) -> list[str]:
     seen: set[str] = set()
-    ordered: list[str] = []
+    out: list[str] = []
     for value in values:
-        if value and value not in seen:
-            seen.add(value)
-            ordered.append(value)
-    return ordered
+        text = _clean(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
 
 
 def narrow_image_candidates(
     retrieval: RetrievalResult | None,
-    candidates: list[ImageCandidate],
+    image_candidates: list[ImageCandidate],
     *,
     constrained: bool,
 ) -> list[ImageCandidate]:
-    """Keep the historical product order when the user supplied no OE or vehicle."""
-    if constrained or retrieval is None:
-        return candidates
-    if retrieval.accepted and retrieval.matched_sku:
-        matched = next((item for item in candidates if item.sku == retrieval.matched_sku), None)
-        if matched:
-            return [matched]
-        return [
-            ImageCandidate(
-                sku=retrieval.matched_sku,
-                score=float(retrieval.score or 0),
-                category_cn=retrieval.selected_category_cn,
-                category_id=retrieval.selected_category_id,
-            )
-        ]
-    if retrieval.decision == "category_match" and retrieval.selected_category_id:
-        ranked = SimilarityService.filter_same_category_skus(
-            [
-                SearchCandidateItem(
-                    sku=item.sku,
-                    category_id=item.category_id,
-                    category_cn=item.category_cn,
-                    score=item.score,
-                )
-                for item in candidates
-            ],
-            retrieval.selected_category_id,
-            top_n=settings.SEARCH_CATEGORY_TOP_N,
-            relative_floor=settings.SEARCH_CATEGORY_RELATIVE_FLOOR,
-            min_score=settings.SEARCH_CATEGORY_MIN_SCORE,
-        )
-        return [
-            ImageCandidate(
-                sku=item.sku,
-                score=float(item.score),
-                category_cn=item.category_cn,
-                category_id=item.category_id,
-            )
-            for item in ranked
-        ]
-    return candidates
+    if not image_candidates or not constrained:
+        return image_candidates
+    if retrieval and retrieval.accepted and retrieval.matched_sku:
+        matched = _clean(retrieval.matched_sku)
+        filtered = [item for item in image_candidates if item.sku == matched]
+        return filtered or image_candidates
+    return image_candidates[:3]
 
 
-def candidates_from_retrieval(retrieval: RetrievalResult | None) -> tuple[list[ImageCandidate], bool]:
+def candidates_from_retrieval(
+    retrieval: RetrievalResult | None,
+) -> tuple[list[ImageCandidate], bool]:
     if retrieval is None:
         return [], False
-    best: dict[str, ImageCandidate] = {}
-    for item in retrieval.candidates or []:
-        if not isinstance(item, dict):
-            continue
-        sku = _clean(item.get("sku"))
-        if not sku:
-            continue
-        try:
-            score = float(item.get("score") or 0)
-        except (TypeError, ValueError):
-            score = 0.0
-        current = ImageCandidate(
-            sku=sku,
-            score=score,
-            category_cn=_clean(item.get("category_cn")) or None,
-            category_id=_clean(item.get("category_id")) or None,
-        )
-        previous = best.get(sku)
-        if previous is None or current.score > previous.score:
-            best[sku] = current
-    ordered = sorted(best.values(), key=lambda item: (-item.score, item.sku))
-    reliable = bool(retrieval.accepted and retrieval.matched_sku) or retrieval.decision == "category_match"
-    if retrieval.accepted and retrieval.matched_sku and retrieval.matched_sku not in best:
-        ordered.insert(
-            0,
+    reliable = bool(retrieval.accepted and retrieval.matched_sku)
+    candidates: list[ImageCandidate] = []
+    if reliable:
+        candidates.append(
             ImageCandidate(
-                sku=retrieval.matched_sku,
-                score=float(retrieval.score or 0),
-                category_cn=retrieval.selected_category_cn,
-                category_id=retrieval.selected_category_id,
-            ),
+                sku=_clean(retrieval.matched_sku),
+                score=float(retrieval.score or 0.0),
+                category_cn=getattr(retrieval, "selected_category_cn", None),
+                category_id=getattr(retrieval, "selected_category_id", None),
+            )
         )
-    if not reliable:
-        return [], False
-    return ordered, True
+        return candidates, True
+
+    raw = retrieval.candidates or []
+    for item in raw:
+        if isinstance(item, SearchCandidateItem):
+            sku = _clean(item.sku)
+            if not sku:
+                continue
+            candidates.append(
+                ImageCandidate(
+                    sku=sku,
+                    score=float(item.score or 0.0),
+                    category_cn=item.category_cn,
+                    category_id=item.category_id,
+                )
+            )
+            continue
+        if isinstance(item, dict):
+            sku = _clean(item.get("sku"))
+            if not sku:
+                continue
+            candidates.append(
+                ImageCandidate(
+                    sku=sku,
+                    score=float(item.get("score") or 0.0),
+                    category_cn=item.get("category_cn"),
+                    category_id=item.get("category_id"),
+                )
+            )
+    return candidates, False
 
 
-def _index_by_short_num(products: dict[str, CatalogProduct]) -> dict[str, list[CatalogProduct]]:
-    """Map gallery SKUs to catalog rows. Retrieval SKU equals short_num, not material_code."""
+def _index_by_material(products: dict[str, CatalogProduct]) -> dict[str, list[CatalogProduct]]:
+    """Map gallery SKU (== material_code) to catalog rows."""
     grouped: dict[str, list[CatalogProduct]] = {}
     for product in products.values():
-        short = _clean(product.short_num)
-        if not short:
+        code = _clean(product.material_code)
+        if not code:
             continue
-        grouped.setdefault(short, []).append(product)
-    for items in grouped.values():
-        items.sort(key=lambda item: item.material_code)
+        grouped.setdefault(code, []).append(product)
     return grouped
 
 
 def _image_rows(
     image_skus: list[str],
-    by_short: dict[str, list[CatalogProduct]],
+    by_material: dict[str, list[CatalogProduct]],
     *,
     include_unmatched: bool,
 ) -> list[_MatchRow]:
     rows: list[_MatchRow] = []
     for sku in image_skus:
-        matches = by_short.get(sku) or []
+        matches = by_material.get(sku) or []
         if matches:
             rows.extend(
                 _MatchRow(display_sku=sku, material_code=product.material_code, image_sku=sku)
@@ -371,9 +252,9 @@ def _image_rows(
 def _code_rows(codes: list[str], catalog: dict[str, CatalogProduct]) -> list[_MatchRow]:
     rows: list[_MatchRow] = []
     for code in codes:
-        product = catalog.get(code)
-        short = _clean(product.short_num) if product else ""
-        rows.append(_MatchRow(display_sku=short or code, material_code=code, image_sku=None))
+        rows.append(_MatchRow(display_sku=code, material_code=code if code in catalog or True else None, image_sku=None))
+        # Always keep material_code as the code for OE/category lists.
+        rows[-1] = _MatchRow(display_sku=code, material_code=code, image_sku=None)
     return rows
 
 
@@ -405,12 +286,12 @@ def assemble_matches(
     oe_codes = _dedupe(oe_material_codes)
     oe_set = set(oe_codes)
     label_codes = _dedupe([item.material_code for item in category_products])
-    by_short = _index_by_short_num(catalog)
+    by_material = _index_by_material(catalog)
 
     if has_oe and reliable_skus:
         intersection = [
             row
-            for row in _image_rows(image_skus, by_short, include_unmatched=False)
+            for row in _image_rows(image_skus, by_material, include_unmatched=False)
             if row.material_code in oe_set
         ]
         chosen = intersection or _code_rows(oe_codes, catalog)
@@ -421,19 +302,26 @@ def assemble_matches(
     elif vehicle_selected and reliable_skus:
         chosen = [
             row
-            for row in _image_rows(image_skus, by_short, include_unmatched=False)
+            for row in _image_rows(image_skus, by_material, include_unmatched=False)
             if fit_counts.get(row.material_code or "", 0) > 0
         ]
         oe_direct = False
     elif vehicle_selected:
-        chosen = [
-            row
-            for row in _code_rows(label_codes, catalog)
-            if fit_counts.get(row.material_code or "", 0) > 0
-        ]
+        # Prefer SKUs that fit the vehicle (from vision_part_vehicle), not only OE-label rows.
+        fit_codes = [code for code, count in fit_counts.items() if count > 0]
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for code in label_codes + fit_codes:
+            if code in seen:
+                continue
+            if fit_counts.get(code, 0) <= 0:
+                continue
+            seen.add(code)
+            ordered.append(code)
+        chosen = _code_rows(ordered, catalog)
         oe_direct = False
     elif reliable_skus:
-        chosen = _image_rows(image_skus, by_short, include_unmatched=True)
+        chosen = _image_rows(image_skus, by_material, include_unmatched=True)
         oe_direct = False
     else:
         chosen = _code_rows(label_codes, catalog)
@@ -477,21 +365,16 @@ def assemble_matches(
             reasons.append("品类标签匹配")
         category = (
             (image.category_cn if image else None)
+            or (category_cn((product.category_code or "").casefold()) if product and product.category_code else None)
             or _clean(category_name)
             or None
         )
-        name = ""
-        if product:
-            name = _clean(product.standard_label_cn) or _clean(product.standard_label_en)
-        if not name:
-            name = f"{category or '产品'} {row.display_sku}"
-        attributes = {}
+        name = code or row.display_sku
+        attributes: dict = {}
         if product:
             attributes["material_code"] = product.material_code
-            short = _clean(product.short_num)
-            if short:
-                attributes["short_num"] = short
-        price = float(product.price) if product and product.price is not None else None
+            if product.category_code:
+                attributes["category_code"] = product.category_code
         results.append(
             ProductOut(
                 sku=row.display_sku,
@@ -500,7 +383,6 @@ def assemble_matches(
                 oe_number=display_oe if has_oe and code in oe_set else None,
                 brand="Reach",
                 fitment=None,
-                price=price,
                 match_reason=" + ".join(reasons) or "产品目录",
                 attributes=attributes,
             )
@@ -508,19 +390,18 @@ def assemble_matches(
     return results
 
 
-def fitment_text(car_ids: list[str], vehicles: dict[str, CatalogVehicle]) -> str | None:
+def fitment_text(keys: list[str], vehicles: dict[str, CatalogVehicle]) -> str | None:
     parts: list[str] = []
-    for car_id in car_ids:
-        vehicle = vehicles.get(car_id)
+    for key in keys:
+        vehicle = vehicles.get(key)
         if vehicle is None:
             continue
-        text = " / ".join(
+        text = " ".join(
             piece
             for piece in (
-                _clean(vehicle.brand),
-                _clean(vehicle.series),
-                _clean(vehicle.model),
-                _clean(vehicle.model_year),
+                _clean(vehicle.make_name),
+                _clean(vehicle.model_name),
+                _clean(vehicle.year),
             )
             if piece
         )
@@ -536,7 +417,6 @@ def attach_ref_nums(
     refs_by_code: dict[str, list[str]],
     oe_number: str | None = None,
 ) -> list[ProductOut]:
-    """Show the searched part number, otherwise only the first adapted ref_num."""
     searched = _clean(oe_number).upper()
     if normalize_oe(oe_number) and searched:
         return [product.model_copy(update={"ref_nums": [searched]}) for product in products]
@@ -570,181 +450,217 @@ def apply_fitment(
     ]
 
 
+def _vehicle_filter_kwargs(selection: VehicleSelection) -> dict:
+    filled = selection.filled()
+    kwargs: dict = {"is_active": True}
+    if "brand" in filled:
+        kwargs["make_name"] = filled["brand"]
+    if "model" in filled:
+        kwargs["model_name"] = filled["model"]
+    if "year" in filled:
+        kwargs["year"] = filled["year"]
+    return kwargs
+
+
 class CatalogService:
-    async def _fetch(self, sql: str, params: list | None = None) -> list:
-        try:
-            connection = Tortoise.get_connection("default")
-            dialect = getattr(getattr(connection, "capabilities", None), "dialect", "")
-            if dialect == "sqlite":
-                sql = sql.replace("%s", "?")
-            _, rows = await connection.execute_query(sql, params or [])
-        except AppError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Catalog query failed")
-            raise AppError(
-                "产品目录暂不可用",
-                code="product_catalog_unavailable",
-                status_code=503,
-            ) from exc
-        return list(rows or [])
-
     async def list_brands(self) -> list[VehicleOption]:
-        rows = await self._fetch(
-            "SELECT DISTINCT TRIM(brand) AS value FROM vehicle_basic_info_usa "
-            "WHERE brand IS NOT NULL AND TRIM(brand) <> ''"
+        rows = await VisionPartVehicle.filter(is_active=True).exclude(make_name="").values_list(
+            "make_name", flat=True
         )
-        return distinct_options([_cell(row, "value", 0) for row in rows])
+        return distinct_options(list(rows))
 
-    async def list_series(self, brand: str) -> list[VehicleOption]:
-        rows = await self._fetch(
-            "SELECT DISTINCT TRIM(series) AS value FROM vehicle_basic_info_usa "
-            "WHERE TRIM(brand) = %s AND series IS NOT NULL AND TRIM(series) <> ''",
-            [_clean(brand)],
-        )
-        return distinct_options([_cell(row, "value", 0) for row in rows])
+    async def list_models(self, brand: str) -> list[VehicleOption]:
+        brand_v = _clean(brand)
+        if not brand_v:
+            return []
+        rows = await VisionPartVehicle.filter(
+            is_active=True, make_name=brand_v
+        ).exclude(model_name=None).exclude(model_name="").values_list("model_name", flat=True)
+        return distinct_options(list(rows))
 
-    async def list_models(self, brand: str, series: str) -> list[VehicleOption]:
-        rows = await self._fetch(
-            "SELECT DISTINCT TRIM(model) AS value FROM vehicle_basic_info_usa "
-            "WHERE TRIM(brand) = %s AND TRIM(series) = %s "
-            "AND model IS NOT NULL AND TRIM(model) <> ''",
-            [_clean(brand), _clean(series)],
-        )
-        return distinct_options([_cell(row, "value", 0) for row in rows])
-
-    async def list_years(self, brand: str, series: str, model: str) -> list[VehicleOption]:
-        rows = await self._fetch(
-            "SELECT TRIM(model_year) AS model_year, TRIM(year_from) AS year_from, "
-            "TRIM(year_till) AS year_till FROM vehicle_basic_info_usa "
-            "WHERE TRIM(brand) = %s AND TRIM(series) = %s AND TRIM(model) = %s",
-            [_clean(brand), _clean(series), _clean(model)],
-        )
-        parsed = [
-            (
-                _clean(_cell(row, "model_year", 0)),
-                _clean(_cell(row, "year_from", 1)),
-                _clean(_cell(row, "year_till", 2)),
-            )
-            for row in rows
-        ]
-        return year_options(parsed)
+    async def list_years(self, brand: str, model: str) -> list[VehicleOption]:
+        brand_v = _clean(brand)
+        model_v = _clean(model)
+        if not brand_v or not model_v:
+            return []
+        rows = await VisionPartVehicle.filter(
+            is_active=True, make_name=brand_v, model_name=model_v
+        ).exclude(year=None).exclude(year="").values_list("year", flat=True)
+        return distinct_options(list(rows))
 
     async def _vehicle_exists(self, selection: VehicleSelection) -> bool:
-        where, params = vehicle_predicates(selection)
-        rows = await self._fetch(
-            f"SELECT reach_car_id FROM vehicle_basic_info_usa v WHERE {where} LIMIT 1",
-            params,
-        )
-        return bool(rows)
+        if not selection.filled():
+            return False
+        return await VisionPartVehicle.filter(**_vehicle_filter_kwargs(selection)).exists()
 
-    async def _oe_materials(self, oe_number: str, selection: VehicleSelection | None) -> list[str]:
+    async def _resolve_vehicle_selection(self, selection: VehicleSelection) -> VehicleSelection:
+        """Map user brand/model/year onto canonical catalog spellings (case/space/punct)."""
+        filled = selection.filled()
+        if not filled:
+            return selection
+
+        brand_raw = filled.get("brand")
+        model_raw = filled.get("model")
+        year_raw = filled.get("year")
+
+        resolved_brand = brand_raw
+        if brand_raw:
+            brand_map = {
+                normalize_vehicle_key(opt.value): opt.value for opt in await self.list_brands()
+            }
+            resolved_brand = brand_map.get(normalize_vehicle_key(brand_raw), brand_raw)
+
+        resolved_model = model_raw
+        if resolved_brand and model_raw:
+            model_map = {
+                normalize_vehicle_key(opt.value): opt.value
+                for opt in await self.list_models(resolved_brand)
+            }
+            resolved_model = model_map.get(normalize_vehicle_key(model_raw), model_raw)
+
+        resolved_year = year_raw
+        if resolved_brand and resolved_model and year_raw:
+            year_map = {
+                normalize_vehicle_key(opt.value): opt.value
+                for opt in await self.list_years(resolved_brand, resolved_model)
+            }
+            resolved_year = year_map.get(normalize_vehicle_key(year_raw), year_raw)
+
+        return VehicleSelection(
+            brand=resolved_brand,
+            model=resolved_model,
+            year=resolved_year,
+        )
+
+    async def _products_by_vehicle(
+        self,
+        selection: VehicleSelection,
+        *,
+        category_code: str | None = None,
+    ) -> list[CatalogProduct]:
+        """SKUs that fit the vehicle, optionally soft-filtered by OE/spec category."""
+        if not selection.filled():
+            return []
+        rows = await VisionPartVehicle.filter(**_vehicle_filter_kwargs(selection)).values_list(
+            "material_code", flat=True
+        )
+        codes = _dedupe(list(rows))[:VEHICLE_MATERIAL_CAP]
+        if not codes:
+            return []
+        products = await self._products(codes)
+        for code in codes:
+            products.setdefault(code, CatalogProduct(material_code=code))
+        items = [products[code] for code in codes if code in products]
+        if not category_code:
+            return items[:RESULT_LIMIT]
+        kept: list[CatalogProduct] = []
+        for item in items:
+            code_cat = _clean(item.category_code) or None
+            # Keep unknown-category vehicle SKUs so fitment-only rows still surface.
+            if code_cat is None or code_cat == category_code:
+                kept.append(item)
+            if len(kept) >= RESULT_LIMIT:
+                break
+        return kept
+
+    async def _oe_materials(self, oe_number: str, _selection: VehicleSelection | None = None) -> list[str]:
         normalized = normalize_oe(oe_number)
         if not normalized:
             return []
-        params: list = [normalized]
-        join = ""
-        where = f"{_normalized_ref_sql('l.ref_num')} = %s"
-        if selection and selection.filled():
-            vehicle_where, vehicle_params = vehicle_predicates(selection)
-            join = "INNER JOIN vehicle_basic_info_usa v ON v.reach_car_id = l.reach_car_id"
-            where = f"{where} AND {vehicle_where}"
-            params.extend(vehicle_params)
-        rows = await self._fetch(
-            "SELECT DISTINCT TRIM(l.material_code) AS material_code "
-            "FROM product_oe_vehicle_usa l "
-            f"{join} "
-            "WHERE l.material_code IS NOT NULL AND TRIM(l.material_code) <> '' "
-            f"AND {where} ORDER BY material_code",
-            params,
+        rows = await VisionPartOe.filter(is_active=True, oe_normalized=normalized).values_list(
+            "material_code", flat=True
         )
-        return [_clean(_cell(row, "material_code", 0)) for row in rows if _clean(_cell(row, "material_code", 0))]
+        return _dedupe(list(rows))
 
     async def _products(self, codes: list[str]) -> dict[str, CatalogProduct]:
         codes = _dedupe(codes)
         if not codes:
             return {}
         products: dict[str, CatalogProduct] = {}
-        for chunk in _chunks(codes):
-            placeholders = ", ".join(["%s"] * len(chunk))
-            rows = await self._fetch(
-                "SELECT material_code, short_num, standard_label_cn, standard_label_en, price "
-                f"FROM product_basic_info_usa WHERE material_code IN ({placeholders})",
-                chunk,
+        oe_rows = await VisionPartOe.filter(is_active=True, material_code__in=codes).all()
+        for row in oe_rows:
+            code = _clean(row.material_code)
+            if not code:
+                continue
+            existing = products.get(code)
+            if existing is None or not existing.category_code:
+                products[code] = CatalogProduct(
+                    material_code=code,
+                    category_code=_clean(row.category) or None,
+                )
+        missing = [c for c in codes if c not in products]
+        if missing:
+            veh = await VisionPartVehicle.filter(is_active=True, material_code__in=missing).values_list(
+                "material_code", flat=True
             )
-            for row in rows:
-                product = _product_from_row(row)
-                if product is None:
-                    continue
-                products[product.material_code] = product
+            for code in _dedupe(list(veh)):
+                products.setdefault(code, CatalogProduct(material_code=code))
+            still = [c for c in missing if c not in products]
+            if still:
+                specs = await VisionRadiatorSpec.filter(is_active=True, material_code__in=still).values_list(
+                    "material_code", flat=True
+                )
+                for code in _dedupe(list(specs)):
+                    products.setdefault(
+                        code,
+                        CatalogProduct(material_code=code, category_code="RADIATOR"),
+                    )
         return products
 
-    async def _products_for_short_nums(self, skus: list[str]) -> dict[str, CatalogProduct]:
-        """Load catalog rows whose short_num is a gallery SKU."""
-        skus = _dedupe([_clean(sku) for sku in skus])
-        if not skus:
-            return {}
-        products: dict[str, CatalogProduct] = {}
-        for chunk in _chunks(skus):
-            placeholders = ", ".join(["%s"] * len(chunk))
-            rows = await self._fetch(
-                "SELECT material_code, short_num, standard_label_cn, standard_label_en, price "
-                "FROM product_basic_info_usa "
-                f"WHERE short_num IS NOT NULL AND TRIM(short_num) IN ({placeholders})",
-                chunk,
-            )
-            for row in rows:
-                product = _product_from_row(row)
-                if product is None:
-                    continue
-                products[product.material_code] = product
-        return products
+    async def _products_for_skus(self, skus: list[str]) -> dict[str, CatalogProduct]:
+        """Gallery SKU equals material_code."""
+        return await self._products(skus)
 
     async def _products_by_label(self, category_name: str) -> list[CatalogProduct]:
-        label = _clean(category_name)
-        if not label:
-            return []
-        pattern = _like_pattern(label)
-        rows = await self._fetch(
-            "SELECT material_code, short_num, standard_label_cn, standard_label_en, price "
-            "FROM product_basic_info_usa "
-            "WHERE standard_label_cn LIKE %s ESCAPE '\\\\' "
-            "OR standard_label_en LIKE %s ESCAPE '\\\\' "
-            "ORDER BY CASE WHEN standard_label_cn LIKE %s ESCAPE '\\\\' THEN 0 ELSE 1 END, "
-            "material_code LIMIT %s",
-            [pattern, pattern, pattern, LABEL_MATCH_LIMIT],
-        )
+        code = normalize_category_code(category_name)
+        if not code:
+            # Fallback: treat as material_code search fragment
+            needle = _clean(category_name)
+            if not needle:
+                return []
+            rows = await VisionPartOe.filter(is_active=True, material_code__icontains=needle).limit(
+                LABEL_MATCH_LIMIT
+            )
+            return [
+                CatalogProduct(material_code=r.material_code, category_code=_clean(r.category) or None)
+                for r in rows
+            ]
+        rows = await VisionPartOe.filter(is_active=True, category=code).limit(LABEL_MATCH_LIMIT * 5)
+        seen: set[str] = set()
         products: list[CatalogProduct] = []
         for row in rows:
-            product = _product_from_row(row)
-            if product is not None:
-                products.append(product)
+            code_m = _clean(row.material_code)
+            if not code_m or code_m in seen:
+                continue
+            seen.add(code_m)
+            products.append(CatalogProduct(material_code=code_m, category_code=code))
+            if len(products) >= LABEL_MATCH_LIMIT:
+                break
         return products
 
     async def _fit_counts(self, codes: list[str], selection: VehicleSelection) -> dict[str, int]:
         codes = _dedupe(codes)
         if not codes or not selection.filled():
             return {}
-        where, params = vehicle_predicates(selection)
+        kwargs = _vehicle_filter_kwargs(selection)
+        rows = (
+            await VisionPartVehicle.filter(**kwargs, material_code__in=codes)
+            .annotate(fit_count=Count("id"))
+            .group_by("material_code")
+            .values("material_code", "fit_count")
+        )
         counts: dict[str, int] = {}
-        for chunk in _chunks(codes):
-            placeholders = ", ".join(["%s"] * len(chunk))
-            rows = await self._fetch(
-                "SELECT l.material_code AS material_code, COUNT(DISTINCT l.reach_car_id) AS fit_count "
-                "FROM product_oe_vehicle_usa l "
-                "INNER JOIN vehicle_basic_info_usa v ON v.reach_car_id = l.reach_car_id "
-                f"WHERE l.material_code IN ({placeholders}) AND {where} "
-                "GROUP BY l.material_code",
-                [*chunk, *params],
-            )
-            for row in rows:
-                code = _clean(_cell(row, "material_code", 0))
-                if not code:
-                    continue
-                try:
-                    counts[code] = int(_cell(row, "fit_count", 1) or 0)
-                except (TypeError, ValueError):
-                    counts[code] = 0
+        for row in rows:
+            code = _clean(row.get("material_code"))
+            if code:
+                counts[code] = int(row.get("fit_count") or 0)
+        # Fallback if annotate/group_by unsupported: count manually
+        if not counts:
+            items = await VisionPartVehicle.filter(**kwargs, material_code__in=codes).all()
+            for item in items:
+                code = _clean(item.material_code)
+                if code:
+                    counts[code] = counts.get(code, 0) + 1
         return counts
 
     async def _fitment_samples(
@@ -755,101 +671,88 @@ class CatalogService:
         codes = _dedupe(codes)
         if not codes:
             return {}, {}
-        placeholders = ", ".join(["%s"] * len(codes))
-        params: list = list(codes)
-        join = "INNER JOIN vehicle_basic_info_usa v ON v.reach_car_id = l.reach_car_id"
-        where = "1 = 1"
+        qs = VisionPartVehicle.filter(is_active=True, material_code__in=codes)
         if selection and selection.filled():
-            where, vehicle_params = vehicle_predicates(selection)
-            params.extend(vehicle_params)
-        rows = await self._fetch(
-            "SELECT material_code, reach_car_id FROM ("
-            "SELECT material_code, reach_car_id, "
-            "ROW_NUMBER() OVER (PARTITION BY material_code ORDER BY reach_car_id) AS rn "
-            "FROM ("
-            "SELECT DISTINCT l.material_code AS material_code, l.reach_car_id AS reach_car_id "
-            "FROM product_oe_vehicle_usa l "
-            f"{join} WHERE l.material_code IN ({placeholders}) AND {where}"
-            ") distinct_links"
-            ") ranked WHERE rn <= 3",
-            params,
-        )
+            qs = qs.filter(**{k: v for k, v in _vehicle_filter_kwargs(selection).items() if k != "is_active"})
+            qs = qs.filter(is_active=True)
+        items = await qs.limit(500)
         samples: dict[str, list[str]] = {}
-        car_ids: list[str] = []
-        for row in rows:
-            code = _clean(_cell(row, "material_code", 0))
-            car_id = _clean(_cell(row, "reach_car_id", 1))
-            if not code or not car_id:
+        vehicles: dict[str, CatalogVehicle] = {}
+        for item in items:
+            code = _clean(item.material_code)
+            if not code:
                 continue
-            samples.setdefault(code, [])
-            if car_id not in samples[code]:
-                samples[code].append(car_id)
-            car_ids.append(car_id)
-        return samples, await self._vehicles(_dedupe(car_ids))
+            key = f"{item.id}"
+            samples.setdefault(code, []).append(key)
+            vehicles[key] = CatalogVehicle(
+                make_name=_clean(item.make_name) or None,
+                model_name=_clean(item.model_name) or None,
+                year=_clean(item.year) or None,
+            )
+        return samples, vehicles
 
     async def _ref_nums(
         self,
         codes: list[str],
-        selection: VehicleSelection | None,
+        _selection: VehicleSelection | None = None,
     ) -> dict[str, list[str]]:
-        """First adapted part number for each material. Vehicle selection narrows the links."""
         codes = _dedupe(codes)
         if not codes:
             return {}
-        placeholders = ", ".join(["%s"] * len(codes))
-        params: list = list(codes)
-        join = ""
-        where = "l.ref_num IS NOT NULL AND TRIM(l.ref_num) <> ''"
-        if selection and selection.filled():
-            join = "INNER JOIN vehicle_basic_info_usa v ON v.reach_car_id = l.reach_car_id"
-            vehicle_where, vehicle_params = vehicle_predicates(selection)
-            where = f"{where} AND {vehicle_where}"
-            params.extend(vehicle_params)
-        rows = await self._fetch(
-            "SELECT material_code, ref_num FROM ("
-            "SELECT material_code, ref_num, "
-            "ROW_NUMBER() OVER (PARTITION BY material_code ORDER BY ref_num) AS rn "
-            "FROM ("
-            "SELECT DISTINCT TRIM(l.material_code) AS material_code, TRIM(l.ref_num) AS ref_num "
-            "FROM product_oe_vehicle_usa l "
-            f"{join} WHERE l.material_code IN ({placeholders}) AND {where}"
-            ") distinct_refs"
-            f") ranked WHERE rn <= {REF_NUM_LIMIT}",
-            params,
-        )
+        rows = await VisionPartOe.filter(is_active=True, material_code__in=codes).all()
         refs: dict[str, list[str]] = {}
         for row in rows:
-            code = _clean(_cell(row, "material_code", 0))
-            ref_num = _clean(_cell(row, "ref_num", 1))
-            if not code or not ref_num:
+            code = _clean(row.material_code)
+            oe = _clean(row.oe)
+            if not code or not oe:
                 continue
             bucket = refs.setdefault(code, [])
-            if ref_num not in bucket:
-                bucket.append(ref_num)
+            if oe not in bucket:
+                bucket.append(oe)
         return refs
 
-    async def _vehicles(self, car_ids: list[str]) -> dict[str, CatalogVehicle]:
-        if not car_ids:
+    async def product_specs(self, material_code: str) -> dict[str, str]:
+        code = _clean(material_code)
+        if not code:
             return {}
-        placeholders = ", ".join(["%s"] * len(car_ids))
-        rows = await self._fetch(
-            "SELECT reach_car_id, brand, series, model, model_year "
-            f"FROM vehicle_basic_info_usa WHERE reach_car_id IN ({placeholders})",
-            car_ids,
+        row = await VisionRadiatorSpec.get_or_none(material_code=code, is_active=True)
+        if row is None:
+            return {}
+        out: dict[str, str] = {}
+        for name in RADIATOR_SPEC_FIELDS:
+            value = _clean(getattr(row, name, None))
+            if value:
+                out[name] = value
+        return out
+
+    async def attach_specs(self, products: list[ProductOut]) -> list[ProductOut]:
+        codes = _dedupe(
+            [
+                _clean((p.attributes or {}).get("material_code") or p.sku)
+                for p in products
+            ]
         )
-        vehicles: dict[str, CatalogVehicle] = {}
+        if not codes:
+            return products
+        rows = await VisionRadiatorSpec.filter(is_active=True, material_code__in=codes).all()
+        by_code: dict[str, dict[str, str]] = {}
         for row in rows:
-            car_id = _clean(_cell(row, "reach_car_id", 0))
-            if not car_id:
-                continue
-            vehicles[car_id] = CatalogVehicle(
-                reach_car_id=car_id,
-                brand=_clean(_cell(row, "brand", 1)) or None,
-                series=_clean(_cell(row, "series", 2)) or None,
-                model=_clean(_cell(row, "model", 3)) or None,
-                model_year=_clean(_cell(row, "model_year", 4)) or None,
-            )
-        return vehicles
+            specs: dict[str, str] = {}
+            for name in RADIATOR_SPEC_FIELDS:
+                value = _clean(getattr(row, name, None))
+                if value:
+                    specs[name] = value
+            if specs:
+                by_code[_clean(row.material_code)] = specs
+        updated: list[ProductOut] = []
+        for product in products:
+            attrs = dict(product.attributes or {})
+            code = _clean(attrs.get("material_code") or product.sku)
+            specs = by_code.get(code)
+            if specs:
+                attrs["specs"] = specs
+            updated.append(product.model_copy(update={"attributes": attrs}))
+        return updated
 
     async def match_products(
         self,
@@ -861,22 +764,41 @@ class CatalogService:
         vehicle: VehicleSelection,
     ) -> list[ProductOut]:
         vehicle_selected = bool(vehicle.filled())
+        if vehicle_selected:
+            vehicle = await self._resolve_vehicle_selection(vehicle)
         vehicle_resolved = await self._vehicle_exists(vehicle) if vehicle_selected else False
         if vehicle_selected and not vehicle_resolved:
             return []
 
-        oe_codes = await self._oe_materials(oe_number or "", None) if normalize_oe(oe_number) else []
-        category_products = []
+        oe_codes = await self._oe_materials(oe_number or "") if normalize_oe(oe_number) else []
+        category_products: list[CatalogProduct] = []
         if not reliable_skus and not normalize_oe(oe_number) and _clean(category_name):
             category_products = await self._products_by_label(category_name or "")
 
+        category_code = normalize_category_code(category_name) if _clean(category_name) else None
+        vehicle_products: list[CatalogProduct] = []
+        if vehicle_selected and vehicle_resolved:
+            vehicle_products = await self._products_by_vehicle(
+                vehicle, category_code=category_code
+            )
+
         image_skus = _dedupe([item.sku for item in image_candidates]) if reliable_skus else []
         products = await self._products(
-            _dedupe(oe_codes + [item.material_code for item in category_products])
+            _dedupe(
+                oe_codes
+                + [item.material_code for item in category_products]
+                + [item.material_code for item in vehicle_products]
+                + image_skus
+            )
         )
-        products.update(await self._products_for_short_nums(image_skus))
         for item in category_products:
             products.setdefault(item.material_code, item)
+        for item in vehicle_products:
+            existing = products.get(item.material_code)
+            if existing is None:
+                products[item.material_code] = item
+            elif not existing.category_code and item.category_code:
+                products[item.material_code] = item
         fit_counts = await self._fit_counts(list(products), vehicle) if vehicle_selected else {}
         matched = assemble_matches(
             image_candidates=image_candidates,
@@ -901,9 +823,11 @@ class CatalogService:
         )
         fitted = apply_fitment(matched, samples, vehicles)
         if normalize_oe(oe_number):
-            return attach_ref_nums(fitted, {}, oe_number)
-        refs = await self._ref_nums(material_codes, vehicle if vehicle_selected else None)
-        return attach_ref_nums(fitted, refs)
+            with_refs = attach_ref_nums(fitted, {}, oe_number)
+        else:
+            refs = await self._ref_nums(material_codes)
+            with_refs = attach_ref_nums(fitted, refs)
+        return await self.attach_specs(with_refs)
 
     async def search_for_session(self, session) -> list[dict]:
         retrieval = await RetrievalResult.filter(session_id=session.id).order_by("-id").first()
@@ -914,7 +838,6 @@ class CatalogService:
         image_candidates, reliable = candidates_from_retrieval(retrieval)
         vehicle = VehicleSelection(
             brand=session.vehicle_brand,
-            series=session.vehicle_series,
             model=session.vehicle_model,
             year=session.vehicle_year,
         )
@@ -943,7 +866,6 @@ class CatalogService:
                 "category_name": category_name,
                 "category_code": session.confirmed_category_code,
                 "brand": session.vehicle_brand,
-                "series": session.vehicle_series,
                 "model": session.vehicle_model,
                 "year": session.vehicle_year,
                 "oe_number": session.oe_number,

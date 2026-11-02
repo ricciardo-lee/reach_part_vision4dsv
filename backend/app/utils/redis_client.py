@@ -35,6 +35,20 @@ class RedisClient:
     def setex(self, key: str, ttl: int, value: str) -> None:
         self.client.setex(key, ttl, value)
 
+    def setnx_ex(self, key: str, ttl: int, value: str = "1") -> bool:
+        """Set key only if absent, with TTL. Returns True when this call acquired the key."""
+        try:
+            return bool(self.client.set(key, value, nx=True, ex=ttl))
+        except Exception:  # noqa: BLE001
+            logger.warning("Redis setnx_ex failed | key=%s", key, exc_info=True)
+            return True
+
+    def delete(self, key: str) -> None:
+        try:
+            self.client.delete(key)
+        except Exception:  # noqa: BLE001
+            logger.warning("Redis delete failed | key=%s", key, exc_info=True)
+
 
 _redis: Optional[RedisClient] = None
 

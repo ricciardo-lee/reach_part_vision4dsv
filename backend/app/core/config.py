@@ -76,6 +76,32 @@ class Settings(BaseSettings):
     DEEPSEEK_MODEL: str = "deepseek-v4-flash-vision-exp"
     DEEPSEEK_TIMEOUT_SECONDS: int = 60
     DEEPSEEK_MAX_RETRIES: int = 2
+    DEEPSEEK_CHAT_MODEL: str = "deepseek-chat"
+    DEEPSEEK_CHAT_MAX_TOOL_ROUNDS: int = 4
+
+    # Meta WhatsApp Cloud API
+    WHATSAPP_ENABLED: bool = False
+    WHATSAPP_WEBHOOK_PATH_TOKEN: str = "3ffcb52b3d3140c6933dde80b43cafa8"
+    WHATSAPP_VERIFY_TOKEN: str = "reach-use"
+    WHATSAPP_APP_SECRET: str = ""
+    WHATSAPP_ACCESS_TOKEN: str = ""
+    WHATSAPP_PHONE_NUMBER_ID: str = ""
+    WHATSAPP_GRAPH_API_VERSION: str = "v21.0"
+    WHATSAPP_RATE_LIMIT_PER_MINUTE: int = 10
+    WHATSAPP_CONTEXT_MESSAGES: int = 20
+    WHATSAPP_CONVERSATION_IDLE_HOURS: int = 24
+    WHATSAPP_IMAGE_DEBOUNCE_SECONDS: int = 15
+    WHATSAPP_IMAGE_SESSION_TTL_MINUTES: int = 10
+    WHATSAPP_RECOGNITION_TIMEOUT_SECONDS: int = 90
+    WHATSAPP_RECOGNITION_POLL_SECONDS: float = 2.0
+    # Optional HTTP(S) proxy for Graph API + media CDN (e.g. socks5://127.0.0.1:7890).
+    WHATSAPP_HTTP_PROXY: str = ""
+    WHATSAPP_HTTP_RETRIES: int = 3
+    # H5 base URL for WhatsApp photo-result deep links (empty = omit link).
+    WHATSAPP_H5_BASE_URL: str = ""
+    WHATSAPP_SHARED_APP_USER_USERNAME: str = "Lee"
+    WHATSAPP_SHARED_APP_USER_PASSWORD: str = "123456"
+    WHATSAPP_LINK_TOKEN_TTL_HOURS: int = 72
 
     MAX_UPLOAD_MB: int = 10
     MAX_IMAGES_PER_SESSION: int = 8

@@ -135,19 +135,40 @@ start_bg() {
 
   case "$name" in
     celery) pkill -f "celery -A app.tasks.celery_app.celery_app worker" 2>/dev/null || true ;;
+    celery_whatsapp) pkill -f "celery -A app.tasks.celery_app.celery_app worker .* -Q whatsapp" 2>/dev/null || true ;;
     beat) pkill -f "celery -A app.tasks.celery_app.celery_app beat" 2>/dev/null || true ;;
     api) pkill -f "uvicorn app.main:app" 2>/dev/null || true ;;
   esac
   sleep 0.5
 
-  # Fully detach: outer bash -c writes the real child PID, then exits.
-  # Avoids bash `local pid=$!` pitfalls and Cursor shell process-group cleanup.
-  /bin/bash -c '
-    log_file="$1"; pid_file="$2"; shift 2
-    nohup "$@" >>"$log_file" 2>&1 &
-    echo $! >"$pid_file"
-    disown $! 2>/dev/null || true
-  ' bash "$log_file" "$pid_file" "$@"
+  # Fully detach into a new session so Cursor/agent shell teardown cannot SIGTERM children.
+  # start_new_session=True + double-fork keeps services alive after the starter exits.
+  python3 - "$log_file" "$pid_file" "$@" <<'PY'
+import os
+import subprocess
+import sys
+import time
+
+log_file, pid_file, *cmd = sys.argv[1:]
+if os.fork() > 0:
+    time.sleep(0.3)
+    sys.exit(0)
+os.setsid()
+if os.fork() > 0:
+    sys.exit(0)
+with open(log_file, "a", encoding="utf-8") as log:
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=log,
+        start_new_session=True,
+        close_fds=True,
+    )
+with open(pid_file, "w", encoding="utf-8") as fh:
+    fh.write(str(proc.pid))
+sys.exit(0)
+PY
 
   sleep 1
   local pid

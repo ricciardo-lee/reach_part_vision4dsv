@@ -103,6 +103,8 @@ class RecognitionSessionOut(APIModel):
     status: str
     progress_hint: Optional[str] = None
     is_auto_part: bool = True
+    is_supported_category: bool = True
+    supported_categories: List[dict] = Field(default_factory=list)
     recognition_mode: Optional[str] = None  # sku_match | category_match | vision_fallback
     images: List[ImageOut] = Field(default_factory=list)
     result: Optional[RecognitionResultOut] = None
@@ -127,7 +129,6 @@ class ConfirmCategoryIn(BaseModel):
 
 class VehicleFilterIn(BaseModel):
     brand: Optional[str] = None
-    series: Optional[str] = None
     model: Optional[str] = None
     year: Optional[str] = None
     oe_number: Optional[str] = None
@@ -153,9 +154,7 @@ class ProductOut(BaseModel):
     image_url: Optional[str] = None
     stock_status: Optional[str] = None
     ref_nums: list[str] = Field(default_factory=list)
-    price: Optional[float] = None
     match_reason: Optional[str] = None
-    # Reserved for future technical-attribute narrowing (empty for now).
     attributes: Optional[dict] = None
 
 
@@ -184,6 +183,12 @@ class AdminUserOut(APIModel):
 class AppLoginIn(BaseModel):
     username: str
     password: str
+
+
+class WaOpenIn(BaseModel):
+    """WhatsApp H5 deep-link: exchange recognition public_id for shared-user token."""
+
+    public_id: str = Field(min_length=8, max_length=64)
 
 
 class AppTokenOut(BaseModel):

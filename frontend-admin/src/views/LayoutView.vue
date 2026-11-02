@@ -5,6 +5,12 @@
       <el-menu :default-active="$route.path" router background-color="#111827" text-color="#e5e7eb" active-text-color="#93c5fd">
         <el-menu-item index="/">📊 概览</el-menu-item>
         <el-menu-item index="/sessions">🧾 识别记录</el-menu-item>
+        <el-menu-item index="/whatsapp">💬 WhatsApp 对话</el-menu-item>
+        <el-menu-item-group title="目录维护">
+          <el-menu-item index="/catalog/oe">OE 零件号</el-menu-item>
+          <el-menu-item index="/catalog/vehicles">车型</el-menu-item>
+          <el-menu-item index="/catalog/specs">技术参数</el-menu-item>
+        </el-menu-item-group>
         <el-menu-item index="/mappings">🧩 品类映射</el-menu-item>
         <el-menu-item index="/prompts">✍️ Prompt</el-menu-item>
         <el-menu-item index="/users">👥 管理员</el-menu-item>

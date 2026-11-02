@@ -405,7 +405,14 @@ async def _try_category_match(
         return None
 
     groups = SimilarityService.group_candidates_by_category(search.candidates)
-    known = {k: v for k, v in groups.items() if k != "_unknown"}
+    from app.core.constants import SUPPORTED_CATEGORY_IDS
+    from app.services.category_guard import is_supported_category
+
+    known = {
+        k: v
+        for k, v in groups.items()
+        if k != "_unknown" and is_supported_category(k)
+    }
     if not known:
         return None
 
@@ -426,6 +433,7 @@ async def _try_category_match(
                 "category_cn": CATEGORY_CN.get(cid) or (items[0].category_cn if items else cid),
             }
             for cid, items in known.items()
+            if cid in SUPPORTED_CATEGORY_IDS or is_supported_category(cid)
         ]
         client = DeepSeekVisionClient()
         try:
@@ -557,9 +565,22 @@ async def _run_deepseek_vision(session: RecognitionSession, images: List[Uploade
             prompt=prompt.content if prompt else None,
         )
         mapped_code, mapped_name = await map_category(result.part_name)
+        from app.services.category_guard import is_supported_category, normalize_category_code
+
+        supported = result.is_auto_part and is_supported_category(mapped_code or mapped_name or result.part_name)
+        if result.is_auto_part and not supported:
+            mapped_code, mapped_name = None, None
+        elif supported:
+            mapped_code = normalize_category_code(mapped_code or mapped_name or result.part_name) or mapped_code
+
         enriched = []
         for candidate in result.candidates:
             code, name = await map_category(candidate.name)
+            if code or name:
+                if not is_supported_category(code or name):
+                    code, name = None, name or candidate.name
+                else:
+                    code = normalize_category_code(code or name) or code
             enriched.append(
                 {
                     "name": candidate.name,
@@ -583,15 +604,20 @@ async def _run_deepseek_vision(session: RecognitionSession, images: List[Uploade
             confidence=result.confidence,
             reason=result.reason,
             candidates=enriched if result.is_auto_part else [],
-            mapped_category_code=mapped_code if result.is_auto_part else None,
-            mapped_category_name=mapped_name if result.is_auto_part else None,
+            mapped_category_code=mapped_code if result.is_auto_part and supported else None,
+            mapped_category_name=mapped_name if result.is_auto_part and supported else None,
             is_auto_part=result.is_auto_part,
             latency_ms=latency_ms,
             token_usage=usage,
             success=True,
         )
         session.status = "done"
-        session.error_message = None if result.is_auto_part else (result.reason or "未识别到汽配零件")
+        if not result.is_auto_part:
+            session.error_message = result.reason or "未识别到汽配零件"
+        elif not supported:
+            session.error_message = "unsupported_category"
+        else:
+            session.error_message = None
         session.completed_at = datetime.utcnow()
         await session.save()
         logger.info(
