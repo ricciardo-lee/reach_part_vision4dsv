@@ -50,4 +50,4 @@ scripts/clean_photo360.py
 scripts/stat_photo360.py
 .cursor
 backend/tests
-backend/docs/
+backend/docs/deploy/.env.bak*
